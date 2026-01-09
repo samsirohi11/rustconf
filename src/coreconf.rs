@@ -137,10 +137,10 @@ impl CoreconfModel {
                     let identifier = self
                         .sid_file
                         .get_identifier(sid)
-                        .ok_or_else(|| CoreconfError::IdentifierNotFound(sid))?;
+                        .ok_or(CoreconfError::IdentifierNotFound(sid))?;
 
                     // Get the leaf name (last component of path)
-                    let leaf_name = identifier.split('/').last().unwrap_or(identifier);
+                    let leaf_name = identifier.split('/').next_back().unwrap_or(identifier);
 
                     let processed = self.process_value_for_identifier(v, sid, identifier)?;
                     new_map.insert(leaf_name.to_string(), processed);

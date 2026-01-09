@@ -64,14 +64,14 @@ impl RequestHandler {
     /// Response payload: application/yang-instances+cbor-seq
     fn handle_fetch(&self, request: &Request) -> Response {
         // Validate content format
-        if let Some(format) = request.content_format {
-            if format != ContentFormat::YangIdentifiersCbor && format != ContentFormat::YangDataCbor
-            {
-                return Response::error(
-                    ResponseCode::UnsupportedContentFormat,
-                    "expected yang-identifiers+cbor",
-                );
-            }
+        if let Some(format) = request.content_format
+            && format != ContentFormat::YangIdentifiersCbor
+            && format != ContentFormat::YangDataCbor
+        {
+            return Response::error(
+                ResponseCode::UnsupportedContentFormat,
+                "expected yang-identifiers+cbor",
+            );
         }
 
         // Empty payload = return all data
@@ -127,10 +127,10 @@ impl RequestHandler {
                 }
                 Value::Array(arr) => {
                     // Instance identifier with keys
-                    if let Some(first) = arr.first() {
-                        if let Some(sid) = first.as_i64() {
-                            sids.push(sid);
-                        }
+                    if let Some(first) = arr.first()
+                        && let Some(sid) = first.as_i64()
+                    {
+                        sids.push(sid);
                     }
                 }
                 _ => {}
@@ -146,15 +146,14 @@ impl RequestHandler {
     /// Each instance: {SID: value} or {SID: null} for delete
     fn handle_ipatch(&mut self, request: &Request) -> Response {
         // Validate content format
-        if let Some(format) = request.content_format {
-            if format != ContentFormat::YangInstancesCborSeq
-                && format != ContentFormat::YangDataCbor
-            {
-                return Response::error(
-                    ResponseCode::UnsupportedContentFormat,
-                    "expected yang-instances+cbor-seq",
-                );
-            }
+        if let Some(format) = request.content_format
+            && format != ContentFormat::YangInstancesCborSeq
+            && format != ContentFormat::YangDataCbor
+        {
+            return Response::error(
+                ResponseCode::UnsupportedContentFormat,
+                "expected yang-instances+cbor-seq",
+            );
         }
 
         // Parse instances from payload
@@ -184,13 +183,13 @@ impl RequestHandler {
     /// Response payload: application/yang-instances+cbor-seq with {SID: output}
     fn handle_post(&mut self, request: &Request) -> Response {
         // Validate content format
-        if let Some(format) = request.content_format {
-            if format != ContentFormat::YangInstancesCborSeq {
-                return Response::error(
-                    ResponseCode::UnsupportedContentFormat,
-                    "expected yang-instances+cbor-seq",
-                );
-            }
+        if let Some(format) = request.content_format
+            && format != ContentFormat::YangInstancesCborSeq
+        {
+            return Response::error(
+                ResponseCode::UnsupportedContentFormat,
+                "expected yang-instances+cbor-seq",
+            );
         }
 
         // Parse RPC call from payload

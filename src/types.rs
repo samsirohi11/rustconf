@@ -55,7 +55,7 @@ impl YangType {
                 // Union of types
                 let types: Vec<YangType> = arr
                     .iter()
-                    .filter_map(|v| v.as_str().map(|s| Self::from_string(s)))
+                    .filter_map(|v| v.as_str().map(Self::from_string))
                     .collect();
                 YangType::Union(types)
             }
@@ -139,24 +139,21 @@ pub fn cast_to_coreconf(
 
         YangType::Identityref => {
             // Look up SID for "module:identity" format
-            if let (Some(s), Some(lookup)) = (value.as_str(), sid_lookup) {
-                if let Some((_module, identity)) = s.split_once(':') {
-                    if let Some(sid) = lookup(identity) {
+            if let (Some(s), Some(lookup)) = (value.as_str(), sid_lookup)
+                && let Some((_module, identity)) = s.split_once(':')
+                    && let Some(sid) = lookup(identity) {
                         return Ok(Value::Number(sid.into()));
                     }
-                }
-            }
             // Fall back to string
             Ok(value.clone())
         }
 
         YangType::Enumeration(enum_map) => {
             // Look up enum value by name
-            if let Some(s) = value.as_str() {
-                if let Some(&val) = enum_map.get(s) {
+            if let Some(s) = value.as_str()
+                && let Some(&val) = enum_map.get(s) {
                     return Ok(Value::Number(val.into()));
                 }
-            }
             // Try numeric lookup
             if let Some(n) = value.as_i64() {
                 return Ok(Value::Number(n.into()));
@@ -242,12 +239,11 @@ pub fn cast_from_coreconf(
 
         YangType::Identityref => {
             // Look up identifier for SID
-            if let (Some(sid), Some(lookup)) = (value.as_i64(), id_lookup) {
-                if let Some(identifier) = lookup(sid) {
+            if let (Some(sid), Some(lookup)) = (value.as_i64(), id_lookup)
+                && let Some(identifier) = lookup(sid) {
                     let full_ref = format!("{}:{}", module_name, identifier);
                     return Ok(Value::String(full_ref));
                 }
-            }
             Ok(value.clone())
         }
 

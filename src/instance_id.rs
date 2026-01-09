@@ -107,11 +107,10 @@ impl InstancePath {
         }
 
         // Simple case: single SID delta with no keys
-        if self.components.len() == 1 {
-            if let PathComponent::SidDelta(delta) = &self.components[0] {
+        if self.components.len() == 1
+            && let PathComponent::SidDelta(delta) = &self.components[0] {
                 return Value::Number((*delta).into());
             }
-        }
 
         // Complex case: array of deltas and keys
         let arr: Vec<Value> = self

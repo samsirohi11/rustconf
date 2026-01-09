@@ -58,7 +58,7 @@ impl Datastore {
             .model
             .sid_file
             .get_identifier(sid)
-            .ok_or_else(|| CoreconfError::IdentifierNotFound(sid))?;
+            .ok_or(CoreconfError::IdentifierNotFound(sid))?;
         self.get_by_path(identifier)
     }
 
@@ -73,17 +73,13 @@ impl Datastore {
         let mut current = &self.data;
         for part in &parts {
             // Handle module prefix (e.g., "example:greeting")
-            let key = if part.contains(':') {
-                part.to_string()
-            } else {
-                part.to_string()
-            };
+            let key = part.to_string();
 
             match current.get(&key) {
                 Some(v) => current = v,
                 None => {
                     // Try without module prefix for nested nodes
-                    let leaf_name = part.split(':').last().unwrap_or(part);
+                    let leaf_name = part.split(':').next_back().unwrap_or(part);
                     match current.get(leaf_name) {
                         Some(v) => current = v,
                         None => return Ok(None),
@@ -112,7 +108,7 @@ impl Datastore {
             .model
             .sid_file
             .get_identifier(sid)
-            .ok_or_else(|| CoreconfError::IdentifierNotFound(sid))?
+            .ok_or(CoreconfError::IdentifierNotFound(sid))?
             .to_string();
         self.set_by_path(&identifier, value)
     }
@@ -171,7 +167,7 @@ impl Datastore {
             .model
             .sid_file
             .get_identifier(sid)
-            .ok_or_else(|| CoreconfError::IdentifierNotFound(sid))?
+            .ok_or(CoreconfError::IdentifierNotFound(sid))?
             .to_string();
         self.delete_by_path(&identifier)
     }
@@ -196,13 +192,11 @@ impl Datastore {
                 if let Value::Object(map) = current {
                     return Ok(map.remove(&key).is_some());
                 }
-            } else {
-                if let Value::Object(map) = current {
-                    if let Some(v) = map.get_mut(&key) {
-                        current = v;
-                    } else {
-                        return Ok(false);
-                    }
+            } else if let Value::Object(map) = current {
+                if let Some(v) = map.get_mut(&key) {
+                    current = v;
+                } else {
+                    return Ok(false);
                 }
             }
         }
