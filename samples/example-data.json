@@ -1,0 +1,11 @@
+{
+  "example:greeting": {
+    "author": "Obi-Wan Kenobi",
+    "message": "Hello there!"
+  },
+  "example:config": {
+    "enabled": true,
+    "timeout": 30,
+    "name": "my-device"
+  }
+}

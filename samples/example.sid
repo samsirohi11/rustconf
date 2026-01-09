@@ -1,0 +1,16 @@
+{
+    "assignment-range": [{"entry-point": 60000, "size": 100}],
+    "module-name": "example",
+    "module-revision": "2026-01-01",
+    "item": [
+        {"namespace": "module", "identifier": "example", "sid": 60000},
+        {"namespace": "data", "identifier": "/example:greeting", "sid": 60001},
+        {"namespace": "data", "identifier": "/example:greeting/author", "sid": 60002, "type": "string"},
+        {"namespace": "data", "identifier": "/example:greeting/message", "sid": 60003, "type": "string"},
+        {"namespace": "data", "identifier": "/example:config", "sid": 60010},
+        {"namespace": "data", "identifier": "/example:config/enabled", "sid": 60011, "type": "boolean"},
+        {"namespace": "data", "identifier": "/example:config/timeout", "sid": 60012, "type": "uint32"},
+        {"namespace": "data", "identifier": "/example:config/name", "sid": 60013, "type": "string"}
+    ],
+    "key-mapping": {}
+}
