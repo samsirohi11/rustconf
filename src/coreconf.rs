@@ -101,7 +101,7 @@ impl CoreconfModel {
                 Ok(Value::Object(new_map))
             }
             Value::Array(arr) => {
-                let mut new_arr = Vec::new();
+                let mut new_arr = Vec::with_capacity(arr.len());
                 for elem in arr {
                     let processed = self.process_value_for_sid(elem, path, parent_sid)?;
                     new_arr.push(processed);
@@ -148,7 +148,7 @@ impl CoreconfModel {
                 Ok(Value::Object(new_map))
             }
             Value::Array(arr) => {
-                let mut new_arr = Vec::new();
+                let mut new_arr = Vec::with_capacity(arr.len());
                 for elem in arr {
                     let processed = self.process_value_for_identifier(elem, delta, path)?;
                     new_arr.push(processed);

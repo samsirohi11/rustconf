@@ -18,7 +18,7 @@ pub enum PathComponent {
 }
 
 /// Represents a complete instance identifier path
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct InstancePath {
     /// The components of this path
     pub components: Vec<PathComponent>,
@@ -187,7 +187,7 @@ pub fn encode_identifiers(paths: &[InstancePath]) -> Result<Vec<u8>> {
 }
 
 /// Instance with its value for iPATCH/response
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Instance {
     /// The instance identifier (path)
     pub path: InstancePath,

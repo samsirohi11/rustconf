@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Main error type for coreconf operations
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CoreconfError {
     /// SID not found for the given identifier path
     #[error("SID not found for identifier: {0}")]

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use crate::error::{CoreconfError, Result};
 
 /// Represents YANG data types
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum YangType {
     String,
     Int8,

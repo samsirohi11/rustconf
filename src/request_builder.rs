@@ -8,6 +8,7 @@ use crate::instance_id::{Instance, InstancePath, encode_identifiers, encode_inst
 use serde_json::Value;
 
 /// Client-side request builder for CORECONF operations
+#[derive(Debug)]
 pub struct RequestBuilder {
     /// The CORECONF model for SID lookups
     model: CoreconfModel,

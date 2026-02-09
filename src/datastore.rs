@@ -138,10 +138,7 @@ impl Datastore {
             } else {
                 // Navigate or create intermediate containers
                 if let Value::Object(map) = current {
-                    if !map.contains_key(&key) {
-                        map.insert(key.clone(), Value::Object(Map::new()));
-                    }
-                    current = map.get_mut(&key).unwrap();
+                    current = map.entry(key).or_insert_with(|| Value::Object(Map::new()));
                 }
             }
         }

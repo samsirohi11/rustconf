@@ -19,6 +19,7 @@ use serde_json::Value;
 /// let response = handler.handle(&request);
 /// // Send response via your CoAP transport
 /// ```
+#[derive(Debug)]
 pub struct RequestHandler {
     /// The datastore containing YANG data
     datastore: Datastore,
@@ -82,7 +83,7 @@ impl RequestHandler {
         // Parse requested SIDs from payload
         match self.parse_fetch_request(&request.payload) {
             Ok(sids) => {
-                let mut instances = Vec::new();
+                let mut instances = Vec::with_capacity(sids.len());
 
                 for sid in sids {
                     let mut path = InstancePath::new();

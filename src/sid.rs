@@ -63,9 +63,9 @@ impl SidFile {
     pub fn from_str(content: &str) -> Result<Self> {
         let raw: RawSidFile = serde_json::from_str(content)?;
 
-        let mut sids = HashMap::new();
-        let mut ids = HashMap::new();
-        let mut types = HashMap::new();
+        let mut sids = HashMap::with_capacity(raw.item.len());
+        let mut ids = HashMap::with_capacity(raw.item.len());
+        let mut types = HashMap::with_capacity(raw.item.len());
 
         for item in &raw.item {
             sids.insert(item.identifier.clone(), item.sid);

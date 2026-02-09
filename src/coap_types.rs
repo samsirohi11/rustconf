@@ -46,6 +46,17 @@ pub enum Method {
     Post,
 }
 
+impl std::fmt::Display for Method {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Method::Fetch => f.write_str("FETCH"),
+            Method::Get => f.write_str("GET"),
+            Method::IPatch => f.write_str("iPATCH"),
+            Method::Post => f.write_str("POST"),
+        }
+    }
+}
+
 /// CoAP response codes used by CORECONF
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponseCode {
@@ -80,6 +91,13 @@ pub enum ResponseCode {
     // Server error codes
     /// 5.00 Internal Server Error
     InternalServerError,
+}
+
+impl std::fmt::Display for ResponseCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (class, detail) = self.to_code_pair();
+        write!(f, "{}.{:02}", class, detail)
+    }
 }
 
 impl ResponseCode {
@@ -282,7 +300,7 @@ impl Response {
     pub fn method_not_allowed(method: Method) -> Self {
         Self::error(
             ResponseCode::MethodNotAllowed,
-            &format!("Method {:?} not allowed", method),
+            &format!("Method {} not allowed", method),
         )
     }
 }
