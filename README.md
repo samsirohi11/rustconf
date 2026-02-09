@@ -1,118 +1,162 @@
 # rust-coreconf
 
-A Rust implementation of **CORECONF** (CoAP Management Interface), the protocol that enables efficient management of YANG data models over constrained networks using CoAP and CBOR encoding.
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+
+A Rust implementation of **CORECONF** (CoAP Management Interface) per [draft-ietf-core-comi](https://datatracker.ietf.org/doc/draft-ietf-core-comi/), enabling efficient management of YANG data models over constrained networks using CoAP and CBOR encoding.
+
+## Quick Start
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+rust-coreconf = { git = "https://github.com/samsirohi11/rustconf.git" }
+```
+
+Set up a CORECONF server with a datastore:
+
+```rust
+use rust_coreconf::{CoreconfModel, Datastore, RequestHandler};
+use rust_coreconf::coap_types::{Request, Method};
+
+// Load YANG SID file and create model
+let model = CoreconfModel::new("ietf-schc@2026-01-12.sid")?;
+
+// Create datastore and request handler
+let datastore = Datastore::new(model);
+let mut handler = RequestHandler::new(datastore);
+
+// Handle a CORECONF GET request (returns entire datastore as CBOR)
+let request = Request::new(Method::Get);
+let response = handler.handle(&request);
+```
+
+Build FETCH and iPATCH requests from the client side:
+
+```rust
+use rust_coreconf::{RequestBuilder, SidFile};
+
+let sid_file = SidFile::from_file("ietf-schc@2026-01-12.sid")?;
+
+// FETCH specific SIDs
+let fetch_payload = RequestBuilder::build_fetch(&[2501, 2502, 2503])?;
+
+// iPATCH to set values
+let ipatch_payload = RequestBuilder::build_ipatch(
+    &[(2501, serde_json::json!(42))],
+    &sid_file,
+)?;
+```
 
 ## What is CORECONF?
 
-CORECONF is defined in [CoAP Management Interface (CORECONF)](https://datatracker.ietf.org/doc/draft-ietf-core-comi/) (formerly draft-ietf-core-comi) and provides a way to manage IoT devices and network equipment using YANG data models.
+CORECONF provides a way to manage IoT devices using:
 
 - **YANG data models** for structured configuration and state data
 - **CBOR encoding** for compact binary representation (instead of XML/JSON)
 - **CoAP transport** for constrained networks (instead of NETCONF/RESTCONF)
 - **SID (Schema Item Identifier)** for efficient numeric addressing of YANG nodes
 
-This makes CORECONF ideal for resource-constrained devices where bandwidth and processing power are limited, while maintaining full compatibility with standard YANG tooling and data models.
+This makes CORECONF ideal for resource-constrained devices where bandwidth and processing power are limited, while maintaining compatibility with standard YANG tooling.
 
-## Project Overview
+## Features
 
-This library provides a rust implementation of CORECONF. It was designed as a foundational component for SCHC (Static Context Header Compression) rule management, enabling remote configuration of SCHC rules.
-
-### Key Features
-
-- **SID File Parsing**: Load and parse YANG SID files in JSON format, providing bidirectional mapping between YANG paths and numeric identifiers
-- **JSON to CBOR Conversion**: Transform human-readable JSON configuration into compact CBOR with automatic SID delta encoding
-- **CBOR to JSON Conversion**: Decode CBOR responses back to JSON for display and debugging
-- **Request Handler**: Process incoming CORECONF requests (GET, FETCH, iPATCH, POST) with full datastore support
-- **Request Builder**: Construct CORECONF request payloads for client applications
-- **Instance Identifiers**: Support for YANG instance-identifier encoding per RFC 9595
-
-## Architecture
-
-The library is organized into several interconnected modules:
-
-### Core Modules
-
-**CoreconfModel** (`coreconf.rs`) serves as the central entry point, combining SID file information with conversion capabilities. It handles the translation between JSON representations and CBOR-encoded CORECONF payloads using delta-SID encoding for efficiency.
-
-**SidFile** (`sid.rs`) parses and stores SID mapping information from `.sid` files. It provides lookups in both directions: from YANG paths to SIDs and from SIDs back to paths. It also tracks type information for leaf nodes.
-
-**Datastore** (`datastore.rs`) manages the actual YANG data instances. It supports hierarchical JSON structures with get, set, and delete operations addressed by either YANG path or SID number.
-
-**RequestHandler** (`handler.rs`) implements the server-side CORECONF protocol logic. It processes incoming requests and manipulates the datastore accordingly, returning properly formatted responses.
-
-**RequestBuilder** (`request_builder.rs`) provides the client-side counterpart, constructing CBOR payloads for FETCH and iPATCH requests that can be sent to a CORECONF server.
-
-### Supporting Modules
-
-**InstancePath** (`instance_id.rs`) handles YANG instance-identifier encoding and decoding, supporting the delta-encoded paths used in CORECONF's yang-instances+cbor-seq format.
-
-**CoAP Types** (`coap_types.rs`) defines library-agnostic request and response structures, allowing the library to work with any CoAP implementation.
-
-**Types** (`types.rs`) provides core data structures for YANG nodes, including containers, lists, and leaf nodes with their associated values.
+- **SID File Parsing** -- load and parse YANG SID files in JSON format with bidirectional path/SID mapping
+- **JSON to CBOR Conversion** -- transform JSON configuration into compact CBOR with automatic SID delta encoding
+- **CBOR to JSON Conversion** -- decode CBOR responses back to JSON for display and debugging
+- **Request Handler** -- process incoming CORECONF requests (GET, FETCH, iPATCH, POST)
+- **Request Builder** -- construct CORECONF request payloads for client applications
+- **Instance Identifiers** -- YANG instance-identifier encoding per RFC 9595
 
 ## CORECONF Operations
 
-The library implements the four main CORECONF operations:
+| Operation  | CoAP Method | Description                                            |
+| ---------- | ----------- | ------------------------------------------------------ |
+| **GET**    | GET         | Retrieve entire datastore as a CBOR map with SID keys  |
+| **FETCH**  | FETCH       | Selectively retrieve specific data nodes by SID        |
+| **iPATCH** | iPATCH      | Modify specific data nodes (set SID-value or SID-null) |
+| **POST**   | POST        | Invoke YANG RPC or action operations                   |
 
-### GET
+## Architecture
 
-Retrieves the entire datastore contents as a single CBOR map with SID keys. This is useful for initial synchronization or debugging but transfers more data than necessary for targeted queries.
+```
+src/
+  lib.rs             # Public API re-exports
+  coreconf.rs        # CoreconfModel: SID file + JSON/CBOR conversion
+  sid.rs             # SidFile: YANG path <-> SID mapping
+  datastore.rs       # Datastore: hierarchical YANG data instances
+  handler.rs         # RequestHandler: server-side CORECONF protocol
+  request_builder.rs # RequestBuilder: client-side CBOR payload construction
+  instance_id.rs     # YANG instance-identifier encoding/decoding
+  coap_types.rs      # Library-agnostic CoAP request/response types
+  types.rs           # YANG node types (containers, lists, leaves)
+  error.rs           # Error types (CoreconfError)
+```
 
-### FETCH
+### Module Responsibilities
 
-Selectively retrieves specific data nodes by their SID. The request contains a sequence of SIDs (as CBOR integers), and the response returns only the requested values as a sequence of SID-value pairs. This is the most efficient way to read specific configuration or state data.
-
-### iPATCH (Incremental PATCH)
-
-Modifies specific data nodes without affecting others. The request contains a sequence of SID-value pairs to set, or SID-null pairs to delete. This enables atomic updates to multiple values in a single request.
-
-### POST
-
-Invokes YANG RPC or action operations. The request contains the RPC's SID along with any input parameters, and the response includes any output values.
-
-## Example Applications
-
-The project includes a practical example demonstrating the usage:
-
-### CoAP Server (`examples/coap_server.rs`)
-
-A CORECONF server that:
-
-- Loads a SID file and optional initial data from JSON
-- Listens for CoAP requests on an UDP port
-- Processes all CORECONF operations against an in-memory datastore
-- Supports verbose mode with raw CBOR hex dumps for debugging
-- Saves modified data to a JSON file on graceful shutdown (Ctrl+C)
-
-### CoAP Client (`examples/coap_client.rs`)
-
-An interactive REPL-style client for exploring and modifying the data:
-
-- Displays all available SIDs from the loaded model
-- Supports get, fetch, set, and delete commands
-- Shows human-readable output with automatic CBOR-to-JSON conversion
-- Validates SIDs against the model before sending requests
+| Module               | Purpose                                                                |
+| -------------------- | ---------------------------------------------------------------------- |
+| `CoreconfModel`      | Central entry point: SID file + JSON/CBOR conversion with delta encoding |
+| `SidFile`            | Parses `.sid` files, provides bidirectional path/SID lookups             |
+| `Datastore`          | Manages YANG data instances with get/set/delete by path or SID           |
+| `RequestHandler`     | Server-side: processes CoAP requests, manipulates datastore              |
+| `RequestBuilder`     | Client-side: constructs FETCH and iPATCH CBOR payloads                   |
+| `InstancePath`       | Delta-encoded YANG instance-identifiers (RFC 9595)                       |
 
 ## SID Files
 
-SID (Schema Item Identifier) files are JSON documents that map YANG schema nodes to numeric identifiers.
-A SID file contains:
+SID (Schema Item Identifier) files are JSON documents mapping YANG schema nodes to numeric identifiers. They contain:
 
-- **Module name and revision**: Identifies the YANG module
-- **Assignment ranges**: Defines the numeric ranges allocated for SIDs
-- **Item mappings**: Maps each YANG path to its SID, namespace, and optional type
+- **Module name and revision** -- identifies the YANG module
+- **Assignment ranges** -- numeric ranges allocated for SIDs
+- **Item mappings** -- maps each YANG path to its SID, namespace, and optional type
 
-SIDs enable extremely compact CBOR encoding by replacing verbose YANG paths with small integers. The delta encoding further reduces size by transmitting differences between consecutive SIDs rather than absolute values.
+SIDs enable compact CBOR encoding by replacing verbose YANG paths with small integers. Delta encoding further reduces size by transmitting differences between consecutive SIDs.
 
 ## Integration
 
-The library is designed to integrate seamlessly with existing Rust CoAP implementations. The `RequestHandler` accepts abstract request objects and returns abstract responses, allowing you to use any CoAP transport layer (embedded, async, sync).
+The library is designed to work with any CoAP implementation. `RequestHandler` accepts abstract request objects and returns abstract responses, decoupling from specific CoAP transport layers. The `coap_types` module defines the library-agnostic interface.
 
-For embedded systems, the library has minimal dependencies and avoids dynamic allocation where possible. The core conversion functions work with byte slices and can be used in `no_std` environments with minor modifications.
+## Examples
+
+The project includes working examples:
+
+```bash
+# Run the CORECONF server
+cargo run --example coap_server -- --sid model.sid --data initial.json -v
+
+# Run the interactive client
+cargo run --example coap_client -- --sid model.sid
+```
+
+### Server
+
+Loads a SID file and optional initial data, listens for CoAP requests, processes all CORECONF operations against an in-memory datastore. Supports verbose mode with raw CBOR hex dumps. Saves data on Ctrl+C.
+
+### Client
+
+Interactive REPL for exploring and modifying data. Supports `get`, `fetch`, `set`, and `delete` commands with automatic CBOR-to-JSON conversion. Validates SIDs against the loaded model.
 
 ## Building and Testing
 
-The library uses standard Cargo conventions. Run tests with `cargo test` and build examples with `cargo build --examples`. The examples require a CoAP-capable environment (the included examples use UDP sockets with coap-lite).
+```bash
+cargo build
+cargo test
+cargo clippy
+```
+
+## Minimum Supported Rust Version
+
+The MSRV is **1.85** (Rust edition 2024).
+
+## References
+
+- [CoAP Management Interface (CORECONF)](https://datatracker.ietf.org/doc/draft-ietf-core-comi/) -- draft-ietf-core-comi
+- [RFC 9595 - CBOR Encoding of YANG Data](https://datatracker.ietf.org/doc/rfc9595/)
+- [RFC 7252 - CoAP](https://www.rfc-editor.org/rfc/rfc7252)
+- [RFC 8949 - CBOR](https://www.rfc-editor.org/rfc/rfc8949)
 
 ## License
 
