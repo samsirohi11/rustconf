@@ -56,11 +56,11 @@ impl SidFile {
     /// Parse a SID file from the given path
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let content = fs::read_to_string(path.as_ref())?;
-        Self::from_str(&content)
+        Self::from_json_str(&content)
     }
 
     /// Parse a SID file from a JSON string
-    pub fn from_str(content: &str) -> Result<Self> {
+    pub fn from_json_str(content: &str) -> Result<Self> {
         let raw: RawSidFile = serde_json::from_str(content)?;
 
         let mut sids = HashMap::with_capacity(raw.item.len());
@@ -118,6 +118,14 @@ impl SidFile {
     }
 }
 
+impl std::str::FromStr for SidFile {
+    type Err = crate::error::CoreconfError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        Self::from_json_str(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_parse_sid_file() {
-        let sid_file = SidFile::from_str(SAMPLE_SID).unwrap();
+        let sid_file: SidFile = SAMPLE_SID.parse().unwrap();
 
         assert_eq!(sid_file.module_name, "example-1");
         assert_eq!(sid_file.module_revision, "unknown");
@@ -146,7 +154,7 @@ mod tests {
 
     #[test]
     fn test_sid_lookup() {
-        let sid_file = SidFile::from_str(SAMPLE_SID).unwrap();
+        let sid_file: SidFile = SAMPLE_SID.parse().unwrap();
 
         assert_eq!(sid_file.get_sid("/example-1:greeting"), Some(60001));
         assert_eq!(sid_file.get_sid("/example-1:greeting/author"), Some(60002));
@@ -158,7 +166,7 @@ mod tests {
 
     #[test]
     fn test_type_lookup() {
-        let sid_file = SidFile::from_str(SAMPLE_SID).unwrap();
+        let sid_file: SidFile = SAMPLE_SID.parse().unwrap();
 
         assert_eq!(
             sid_file.get_type("/example-1:greeting/author"),

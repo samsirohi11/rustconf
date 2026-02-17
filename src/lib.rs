@@ -10,7 +10,7 @@
 //! use rust_coreconf::coap_types::{Request, Method};
 //!
 //! // Create model from SID file
-//! let model = CoreconfModel::new("example.sid").unwrap();
+//! let model = CoreconfModel::new("example.sid")?;
 //!
 //! // Create datastore with model
 //! let datastore = Datastore::new(model);
@@ -20,7 +20,8 @@
 //!
 //! // Handle incoming requests
 //! let request = Request::new(Method::Get);
-//! let response = handler.handle(&request);
+//! let _response = handler.handle(&request);
+//! # Ok::<(), rust_coreconf::CoreconfError>(())
 //! ```
 
 pub mod coap_types;

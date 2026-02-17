@@ -46,7 +46,7 @@ fn main() {
     println!("  60003 = /example-1:greeting/message (leaf, string)");
     println!();
 
-    let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+    let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
     let datastore = Datastore::from_json(model.clone(), INITIAL_DATA).unwrap();
     let mut handler = RequestHandler::new(datastore);
     let builder = RequestBuilder::new(model.clone());

@@ -23,7 +23,7 @@ const SAMPLE_JSON: &str = r#"{"example-1:greeting": {"author": "Obi", "message":
 
 #[test]
 fn test_coreconf_roundtrip() {
-    let model = CoreconfModel::from_str(SAMPLE_SID).expect("Failed to parse SID");
+    let model: CoreconfModel = SAMPLE_SID.parse().expect("Failed to parse SID");
 
     // Encode to CORECONF
     let cbor = model.to_coreconf(SAMPLE_JSON).expect("Failed to encode");
@@ -41,7 +41,7 @@ fn test_coreconf_roundtrip() {
 
 #[test]
 fn test_handler_get() {
-    let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+    let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
     let datastore = Datastore::from_json(model, SAMPLE_JSON).unwrap();
     let mut handler = RequestHandler::new(datastore);
 
@@ -55,7 +55,7 @@ fn test_handler_get() {
 
 #[test]
 fn test_handler_fetch() {
-    let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+    let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
     let datastore = Datastore::from_json(model.clone(), SAMPLE_JSON).unwrap();
     let mut handler = RequestHandler::new(datastore);
     let builder = RequestBuilder::new(model);
@@ -73,7 +73,7 @@ fn test_handler_fetch() {
 
 #[test]
 fn test_handler_ipatch() {
-    let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+    let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
     let datastore = Datastore::from_json(model.clone(), SAMPLE_JSON).unwrap();
     let mut handler = RequestHandler::new(datastore);
     let builder = RequestBuilder::new(model);

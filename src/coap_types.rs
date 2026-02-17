@@ -140,13 +140,21 @@ pub enum ContentParam {
 }
 
 impl ContentParam {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_query_value(s: &str) -> Option<Self> {
         match s {
             "a" => Some(Self::All),
             "c" => Some(Self::Config),
             "n" => Some(Self::Nonconfig),
             _ => None,
         }
+    }
+}
+
+impl std::str::FromStr for ContentParam {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_query_value(s).ok_or(())
     }
 }
 
@@ -162,12 +170,20 @@ pub enum DefaultsParam {
 }
 
 impl DefaultsParam {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_query_value(s: &str) -> Option<Self> {
         match s {
             "a" => Some(Self::All),
             "t" => Some(Self::Trim),
             _ => None,
         }
+    }
+}
+
+impl std::str::FromStr for DefaultsParam {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_query_value(s).ok_or(())
     }
 }
 
@@ -186,12 +202,12 @@ impl QueryParams {
             if let Some((key, value)) = part.split_once('=') {
                 match key {
                     "c" => {
-                        if let Some(c) = ContentParam::from_str(value) {
+                        if let Some(c) = ContentParam::from_query_value(value) {
                             params.content = c;
                         }
                     }
                     "d" => {
-                        if let Some(d) = DefaultsParam::from_str(value) {
+                        if let Some(d) = DefaultsParam::from_query_value(value) {
                             params.defaults = d;
                         }
                     }

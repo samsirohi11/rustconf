@@ -6,6 +6,8 @@ use std::collections::HashMap;
 
 use crate::error::{CoreconfError, Result};
 
+type SidLookupFn<'a> = dyn Fn(&str) -> Option<i64> + 'a;
+
 /// Represents YANG data types
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum YangType {
@@ -92,7 +94,7 @@ impl YangType {
 pub fn cast_to_coreconf(
     value: &Value,
     yang_type: &YangType,
-    sid_lookup: Option<&dyn Fn(&str) -> Option<i64>>,
+    sid_lookup: Option<&SidLookupFn<'_>>,
 ) -> Result<Value> {
     match yang_type {
         YangType::String | YangType::Uri => {

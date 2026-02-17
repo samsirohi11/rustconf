@@ -23,8 +23,8 @@ impl CoreconfModel {
     }
 
     /// Create a new CORECONF model from a SID file string
-    pub fn from_str(sid_content: &str) -> Result<Self> {
-        let sid_file = SidFile::from_str(sid_content)?;
+    pub fn from_sid_str(sid_content: &str) -> Result<Self> {
+        let sid_file: SidFile = sid_content.parse()?;
         Ok(Self { sid_file })
     }
 
@@ -174,6 +174,14 @@ impl CoreconfModel {
     }
 }
 
+impl std::str::FromStr for CoreconfModel {
+    type Err = CoreconfError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        Self::from_sid_str(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_to_coreconf() {
-        let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+        let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
         let cbor = model.to_coreconf(SAMPLE_JSON).unwrap();
 
         // CBOR should be non-empty
@@ -206,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip() {
-        let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+        let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
 
         // Encode
         let cbor = model.to_coreconf(SAMPLE_JSON).unwrap();

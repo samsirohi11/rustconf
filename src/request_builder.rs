@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_build_fetch() {
-        let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+        let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
         let builder = RequestBuilder::new(model);
 
         let payload = builder.build_fetch(&["/example-1:greeting"]).unwrap();
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn test_build_ipatch() {
-        let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+        let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
         let builder = RequestBuilder::new(model);
 
         let payload = builder
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_build_fetch_sids() {
-        let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+        let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
         let builder = RequestBuilder::new(model);
 
         let payload = builder.build_fetch_sids(&[60001, 60002]).unwrap();

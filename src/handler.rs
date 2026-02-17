@@ -255,7 +255,7 @@ mod tests {
     }"#;
 
     fn create_handler() -> RequestHandler {
-        let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+        let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
         let json = r#"{"example-1:greeting": {"author": "Obi", "message": "Hello!"}}"#;
         let datastore = Datastore::from_json(model, json).unwrap();
         RequestHandler::new(datastore)

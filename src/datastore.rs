@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_datastore_set_get() {
-        let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+        let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
         let mut ds = Datastore::new(model);
 
         ds.set_by_path("/example-1:greeting/author", Value::String("Obi".into()))
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_datastore_delete() {
-        let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+        let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
         let mut ds = Datastore::new(model);
 
         ds.set_by_path("/example-1:greeting/author", Value::String("Obi".into()))
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_datastore_from_json() {
-        let model = CoreconfModel::from_str(SAMPLE_SID).unwrap();
+        let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
         let json = r#"{"example-1:greeting": {"author": "Obi", "message": "Hello!"}}"#;
         let ds = Datastore::from_json(model, json).unwrap();
 
