@@ -3,6 +3,7 @@ members = [
     "crates/coreconf-data",
     "crates/coreconf-schema",
     "crates/coreconf-compiler",
+    "crates/coreconf-server",
 ]
 resolver = "2"
 
