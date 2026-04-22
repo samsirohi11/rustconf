@@ -1,8 +1,9 @@
 use crate::auth::{AuthorizationRequest, Authorizer};
 use crate::operations::OperationRegistry;
 use crate::store::Store;
+use coreconf_schema::CompiledSchemaBundle;
 use rust_coreconf::coap_types::{ContentFormat, Request, Response};
-use rust_coreconf::RequestHandler;
+use rust_coreconf::{CoreconfModel, Datastore, RequestHandler};
 
 pub struct CoreconfServer<S, A> {
     store: S,
@@ -36,6 +37,22 @@ where
 
         self.handler.as_mut().map(|handler| handler.handle(request)).unwrap_or_else(|| {
             Response::content(Vec::new(), ContentFormat::YangDataCbor)
+        })
+    }
+
+    pub fn from_bundle(
+        bundle: CompiledSchemaBundle,
+        store: S,
+        authorizer: A,
+        _audit: crate::NoopAuditSink,
+    ) -> Result<Self, String> {
+        let model = CoreconfModel::from_bundle(bundle).map_err(|err| err.to_string())?;
+        let datastore = Datastore::new(model);
+        Ok(Self {
+            store,
+            authorizer,
+            operations: OperationRegistry::default(),
+            handler: Some(RequestHandler::new(datastore)),
         })
     }
 }
