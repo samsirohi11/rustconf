@@ -2,9 +2,11 @@
 
 use std::path::Path;
 
+use coreconf_schema::CompiledSchemaBundle;
 use serde_json::{Map, Value};
 
 use crate::error::{CoreconfError, Result};
+use crate::schema_adapter::SchemaView;
 use crate::sid::SidFile;
 use crate::types::{cast_from_coreconf, cast_to_coreconf};
 
@@ -13,19 +15,38 @@ use crate::types::{cast_from_coreconf, cast_to_coreconf};
 pub struct CoreconfModel {
     /// Parsed SID file
     pub sid_file: SidFile,
+    /// Bundle-backed schema view
+    pub schema: SchemaView,
 }
 
 impl CoreconfModel {
     /// Create a new CORECONF model from a SID file path
     pub fn new(sid_path: impl AsRef<Path>) -> Result<Self> {
         let sid_file = SidFile::from_file(sid_path)?;
-        Ok(Self { sid_file })
+        let bundle = sid_file.to_bundle()?;
+        Ok(Self {
+            schema: SchemaView::from_sid_file(bundle, sid_file.clone()),
+            sid_file,
+        })
     }
 
     /// Create a new CORECONF model from a SID file string
     pub fn from_sid_str(sid_content: &str) -> Result<Self> {
         let sid_file: SidFile = sid_content.parse()?;
-        Ok(Self { sid_file })
+        let bundle = sid_file.to_bundle()?;
+        Ok(Self {
+            schema: SchemaView::from_sid_file(bundle, sid_file.clone()),
+            sid_file,
+        })
+    }
+
+    /// Create a new CORECONF model from a compiled schema bundle
+    pub fn from_bundle(bundle: CompiledSchemaBundle) -> Result<Self> {
+        let sid_file = SidFile::from_bundle(&bundle);
+        Ok(Self {
+            schema: SchemaView::from_bundle(bundle),
+            sid_file,
+        })
     }
 
     /// Convert JSON string to CORECONF (CBOR bytes)

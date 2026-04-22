@@ -31,6 +31,7 @@ mod error;
 pub mod handler;
 pub mod instance_id;
 pub mod request_builder;
+mod schema_adapter;
 mod sid;
 mod types;
 

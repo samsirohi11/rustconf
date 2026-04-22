@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use coreconf_schema::{CompiledSchemaBundle, NodeKind, SchemaModule, SchemaNode, YangScalarType};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -115,6 +116,110 @@ impl SidFile {
     /// Get keys for a list entry by its SID
     pub fn get_keys(&self, list_sid: i64) -> Option<&Vec<i64>> {
         self.key_mapping.get(&list_sid)
+    }
+
+    pub fn to_bundle(&self) -> Result<CompiledSchemaBundle> {
+        let mut nodes = std::collections::BTreeMap::new();
+
+        for (path, sid) in &self.sids {
+            nodes.insert(
+                path.clone(),
+                SchemaNode {
+                    path: path.clone(),
+                    sid: Some(*sid),
+                    kind: NodeKind::Leaf,
+                    yang_type: self.types.get(path).map(yang_to_schema),
+                    keys: self
+                        .key_mapping
+                        .get(sid)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|key_sid| self.ids.get(key_sid).map(|key| key.to_string()))
+                        .collect(),
+                    children: Vec::new(),
+                    must: Vec::new(),
+                    when: None,
+                },
+            );
+        }
+
+        Ok(CompiledSchemaBundle {
+            format_version: 1,
+            modules: vec![SchemaModule {
+                name: self.module_name.clone(),
+                revision: self.module_revision.clone(),
+            }],
+            nodes,
+            operations: std::collections::BTreeMap::new(),
+        })
+    }
+
+    pub fn from_bundle(bundle: &CompiledSchemaBundle) -> Self {
+        let module = bundle.modules.first().cloned().unwrap_or(SchemaModule {
+            name: "unknown".into(),
+            revision: "unknown".into(),
+        });
+
+        let mut sids = HashMap::new();
+        let mut ids = HashMap::new();
+        let mut types = HashMap::new();
+        let mut key_mapping = HashMap::new();
+
+        for node in bundle.nodes.values() {
+            if let Some(sid) = node.sid {
+                sids.insert(node.path.clone(), sid);
+                ids.insert(sid, node.path.clone());
+                if let Some(yang_type) = &node.yang_type {
+                    types.insert(node.path.clone(), schema_to_yang(yang_type));
+                }
+
+                let keys: Vec<i64> = node
+                    .keys
+                    .iter()
+                    .filter_map(|key_path| bundle.nodes.get(key_path).and_then(|key_node| key_node.sid))
+                    .collect();
+                if !keys.is_empty() {
+                    key_mapping.insert(sid, keys);
+                }
+            }
+        }
+
+        Self {
+            module_prefix: format!("/{}:", module.name),
+            module_name: module.name,
+            module_revision: module.revision,
+            sids,
+            ids,
+            types,
+            key_mapping,
+        }
+    }
+}
+
+fn yang_to_schema(yang_type: &YangType) -> YangScalarType {
+    match yang_type {
+        YangType::String => YangScalarType::String,
+        YangType::Boolean => YangScalarType::Boolean,
+        YangType::Int8 | YangType::Int16 | YangType::Int32 | YangType::Int64 => {
+            YangScalarType::Int64
+        }
+        YangType::Uint8 | YangType::Uint16 | YangType::Uint32 | YangType::Uint64 => {
+            YangScalarType::Uint64
+        }
+        YangType::Identityref => YangScalarType::IdentityRef,
+        YangType::Leafref => YangScalarType::LeafRef,
+        _ => YangScalarType::String,
+    }
+}
+
+fn schema_to_yang(yang_type: &YangScalarType) -> YangType {
+    match yang_type {
+        YangScalarType::String => YangType::String,
+        YangScalarType::Boolean => YangType::Boolean,
+        YangScalarType::Int64 => YangType::Int64,
+        YangScalarType::Uint64 => YangType::Uint64,
+        YangScalarType::IdentityRef => YangType::Identityref,
+        YangScalarType::LeafRef => YangType::Leafref,
     }
 }
 
