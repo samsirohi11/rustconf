@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/coreconf-data",
+    "crates/coreconf-schema",
 ]
 resolver = "2"
 
