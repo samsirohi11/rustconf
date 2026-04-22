@@ -22,6 +22,12 @@ cargo test -q
 cargo run -p coreconf-cli -- compile crates/coreconf-compiler/tests/fixtures/basic-module.yang --bundle-out target/basic.bundle.json --sid-out target/basic.sid.json
 ```
 
+## Phase 2A Compiler Commands
+
+```bash
+cargo run -p coreconf-cli -- compile crates/coreconf-compiler/tests/fixtures/basic-module.yang --bundle-out target/basic.bundle.json --sid-out target/basic.sid.json --tree-out target/basic.tree.txt --yang-out target/basic.normalized.yang --yin-out target/basic.normalized.yin
+```
+
 ## Quick Start
 
 Add to your `Cargo.toml`:
