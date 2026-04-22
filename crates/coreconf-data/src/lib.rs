@@ -30,6 +30,7 @@ pub mod datastore;
 mod error;
 pub mod handler;
 pub mod instance_id;
+mod path;
 pub mod request_builder;
 mod schema_adapter;
 mod sid;
