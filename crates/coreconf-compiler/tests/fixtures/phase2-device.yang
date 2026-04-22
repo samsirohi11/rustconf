@@ -20,6 +20,18 @@ module phase2-device {
       leaf owner {
         type string;
       }
+
+      leaf role {
+        type identityref {
+          base p2t:device-role;
+        }
+      }
+
+      leaf owner-name-ref {
+        type leafref {
+          path "../owner";
+        }
+      }
     }
   }
 }
