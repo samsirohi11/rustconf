@@ -1,0 +1,8 @@
+module imported-types {
+  namespace "urn:imported-types";
+  prefix types;
+
+  typedef username {
+    type string;
+  }
+}
