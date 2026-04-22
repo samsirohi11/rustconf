@@ -1,0 +1,20 @@
+module phase2-overrides {
+  namespace "urn:phase2:overrides";
+  prefix p2o;
+
+  import phase2-device {
+    prefix p2d;
+  }
+
+  augment "/p2d:inventory/p2d:device" {
+    leaf firmware-version {
+      type string;
+    }
+  }
+
+  deviation "/p2d:inventory/p2d:device/p2d:owner" {
+    deviate add {
+      must "string-length(.) > 0";
+    }
+  }
+}

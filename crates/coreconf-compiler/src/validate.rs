@@ -101,6 +101,38 @@ pub fn compile_paths(paths: &[PathBuf]) -> Result<CompiledSchemaBundle, Validati
         )?;
     }
 
+    for module in &parsed_modules {
+        if !matches!(module.kind, AstModuleKind::Module) {
+            continue;
+        }
+
+        let context = collect_context(module, &parsed_modules);
+        for statement in &module.children {
+            match statement.keyword.as_str() {
+                "augment" => {
+                    if let Some(target) = statement.argument.as_deref() {
+                        let normalized_target = normalize_schema_path(target, &context);
+                        let mut operation_updates = BTreeMap::new();
+                        lower_statements(
+                            &statement.children,
+                            &normalized_target,
+                            &context,
+                            &mut bundle.nodes,
+                            &mut operation_updates,
+                        )?;
+                    }
+                }
+                "deviation" => {
+                    if let Some(target) = statement.argument.as_deref() {
+                        let normalized_target = normalize_schema_path(target, &context);
+                        apply_deviation(&normalized_target, statement, &mut bundle.nodes)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     Ok(bundle)
 }
 
@@ -471,6 +503,68 @@ fn normalize_leafref_path(current_path: &str, target: &str) -> String {
     } else {
         segments.join("/")
     }
+}
+
+fn normalize_schema_path(target: &str, context: &ModuleContext) -> String {
+    if !target.starts_with('/') {
+        return normalize_leafref_path(&format!("/{}:", context.module_name), target);
+    }
+
+    let mut normalized = Vec::new();
+    for (index, segment) in target.trim_start_matches('/').split('/').enumerate() {
+        if segment.is_empty() {
+            continue;
+        }
+
+        if let Some((prefix, name)) = segment.split_once(':') {
+            let module_name = if context.local_prefix.as_deref() == Some(prefix) {
+                context.module_name.clone()
+            } else {
+                context
+                    .imports
+                    .get(prefix)
+                    .cloned()
+                    .unwrap_or_else(|| prefix.to_string())
+            };
+
+            if index == 0 {
+                normalized.push(format!("{module_name}:{name}"));
+            } else {
+                normalized.push(name.to_string());
+            }
+        } else {
+            normalized.push(segment.to_string());
+        }
+    }
+
+    format!("/{}", normalized.join("/"))
+}
+
+fn apply_deviation(
+    target: &str,
+    statement: &AstStatement,
+    nodes: &mut BTreeMap<String, SchemaNode>,
+) -> Result<(), ValidationError> {
+    let node = nodes
+        .get_mut(target)
+        .ok_or_else(|| ValidationError::Parse(format!("missing deviation target: {target}")))?;
+
+    for child in &statement.children {
+        if child.keyword == "deviate" && child.argument.as_deref() == Some("add") {
+            for grandchild in &child.children {
+                if grandchild.keyword == "must" {
+                    if let Some(expr) = &grandchild.argument {
+                        validate_xpath(expr)?;
+                        if !node.must.contains(expr) {
+                            node.must.push(expr.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn join_path(parent_path: &str, name: &str) -> String {
