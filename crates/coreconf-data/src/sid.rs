@@ -129,6 +129,7 @@ impl SidFile {
                     sid: Some(*sid),
                     kind: NodeKind::Leaf,
                     yang_type: self.types.get(path).map(yang_to_schema),
+                    type_ref: None,
                     keys: self
                         .key_mapping
                         .get(sid)
@@ -149,6 +150,8 @@ impl SidFile {
                 name: self.module_name.clone(),
                 revision: self.module_revision.clone(),
             }],
+            typedefs: Vec::new(),
+            identities: Vec::new(),
             nodes,
             operations: std::collections::BTreeMap::new(),
         })

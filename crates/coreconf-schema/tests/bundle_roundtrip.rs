@@ -13,6 +13,7 @@ fn serializes_schema_bundle_roundtrip() {
             sid: Some(60002),
             kind: NodeKind::Leaf,
             yang_type: Some(YangScalarType::Boolean),
+            type_ref: None,
             keys: vec![],
             children: vec![],
             must: vec![],
@@ -26,6 +27,8 @@ fn serializes_schema_bundle_roundtrip() {
             name: "demo".into(),
             revision: "2026-04-22".into(),
         }],
+        typedefs: vec![],
+        identities: vec![],
         nodes,
         operations: BTreeMap::from([(
             "/demo:reset".into(),

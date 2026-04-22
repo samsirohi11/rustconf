@@ -18,6 +18,8 @@ pub struct SchemaNode {
     pub sid: Option<i64>,
     pub kind: NodeKind,
     pub yang_type: Option<YangScalarType>,
+    #[serde(default)]
+    pub type_ref: Option<crate::ResolvedType>,
     pub keys: Vec<String>,
     pub children: Vec<String>,
     pub must: Vec<String>,

@@ -1,4 +1,4 @@
-use crate::{OperationSchema, SchemaNode};
+use crate::{IdentitySchema, OperationSchema, SchemaNode, TypedefSchema};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -6,6 +6,10 @@ use std::collections::BTreeMap;
 pub struct CompiledSchemaBundle {
     pub format_version: u32,
     pub modules: Vec<SchemaModule>,
+    #[serde(default)]
+    pub typedefs: Vec<TypedefSchema>,
+    #[serde(default)]
+    pub identities: Vec<IdentitySchema>,
     pub nodes: BTreeMap<String, SchemaNode>,
     pub operations: BTreeMap<String, OperationSchema>,
 }

@@ -51,6 +51,8 @@ pub fn compile_paths(paths: &[PathBuf]) -> Result<CompiledSchemaBundle, Validati
                 revision: "unknown".into(),
             })
             .collect(),
+        typedefs: Vec::new(),
+        identities: Vec::new(),
         nodes: BTreeMap::new(),
         operations: BTreeMap::new(),
     };
@@ -160,6 +162,7 @@ fn lower_statements(
                         sid: None,
                         kind,
                         yang_type,
+                        type_ref: None,
                         keys,
                         children: children.clone(),
                         must,
