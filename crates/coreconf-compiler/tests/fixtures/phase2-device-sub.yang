@@ -1,0 +1,11 @@
+submodule phase2-device-sub {
+  belongs-to phase2-device {
+    prefix p2d;
+  }
+
+  grouping inventory-common {
+    leaf serial {
+      type string;
+    }
+  }
+}

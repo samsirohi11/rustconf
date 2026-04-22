@@ -1,0 +1,16 @@
+module phase2-types {
+  namespace "urn:phase2:types";
+  prefix p2t;
+
+  typedef device-name {
+    type string;
+  }
+
+  identity device-role;
+  identity router {
+    base device-role;
+  }
+  identity sensor {
+    base device-role;
+  }
+}

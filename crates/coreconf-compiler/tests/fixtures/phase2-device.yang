@@ -1,0 +1,25 @@
+module phase2-device {
+  namespace "urn:phase2:device";
+  prefix p2d;
+
+  import phase2-types {
+    prefix p2t;
+  }
+
+  include phase2-device-sub;
+
+  container inventory {
+    list device {
+      key "name";
+      uses inventory-common;
+
+      leaf name {
+        type p2t:device-name;
+      }
+
+      leaf owner {
+        type string;
+      }
+    }
+  }
+}

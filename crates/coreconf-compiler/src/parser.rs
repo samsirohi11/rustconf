@@ -1,14 +1,15 @@
-use crate::ast::{AstModule, AstStatement};
+use crate::ast::{AstModule, AstModuleKind, AstStatement};
 use crate::lexer::{lex, Token};
 
 pub fn parse_module(input: &str) -> Result<AstModule, String> {
     let tokens = lex(input);
     let mut cursor = 0;
 
-    match tokens.get(cursor) {
-        Some(Token::Identifier(keyword)) if keyword == "module" => {}
-        _ => return Err("expected module".into()),
-    }
+    let kind = match tokens.get(cursor) {
+        Some(Token::Identifier(keyword)) if keyword == "module" => AstModuleKind::Module,
+        Some(Token::Identifier(keyword)) if keyword == "submodule" => AstModuleKind::Submodule,
+        _ => return Err("expected module or submodule".into()),
+    };
     cursor += 1;
 
     let name = match tokens.get(cursor) {
@@ -18,7 +19,21 @@ pub fn parse_module(input: &str) -> Result<AstModule, String> {
     cursor += 1;
 
     let children = parse_block(&tokens, &mut cursor)?;
-    Ok(AstModule { name, children })
+    let belongs_to = if matches!(kind, AstModuleKind::Submodule) {
+        children
+            .iter()
+            .find(|child| child.keyword == "belongs-to")
+            .and_then(|child| child.argument.clone())
+    } else {
+        None
+    };
+
+    Ok(AstModule {
+        name,
+        kind,
+        belongs_to,
+        children,
+    })
 }
 
 fn parse_block(tokens: &[Token], cursor: &mut usize) -> Result<Vec<AstStatement>, String> {

@@ -1,4 +1,4 @@
-use crate::ast::{AstModule, AstStatement};
+use crate::ast::{AstModule, AstModuleKind, AstStatement};
 use crate::repository::CompilerRepository;
 use crate::xpath::validate_xpath as validate_xpath_impl;
 use coreconf_schema::{
@@ -58,7 +58,11 @@ pub fn compile_paths(paths: &[PathBuf]) -> Result<CompiledSchemaBundle, Validati
     };
 
     for module in &parsed_modules {
-        let groups = collect_groupings(module);
+        if !matches!(module.kind, AstModuleKind::Module) {
+            continue;
+        }
+
+        let groups = collect_groupings(module, &parsed_modules);
         let root = format!("/{}:", module.name);
         lower_statements(
             &module.children,
@@ -72,12 +76,16 @@ pub fn compile_paths(paths: &[PathBuf]) -> Result<CompiledSchemaBundle, Validati
     Ok(bundle)
 }
 
-fn collect_groupings(module: &AstModule) -> HashMap<String, Vec<AstStatement>> {
+fn collect_groupings(module: &AstModule, parsed_modules: &[AstModule]) -> HashMap<String, Vec<AstStatement>> {
     let mut groups = HashMap::new();
-    for child in &module.children {
-        if child.keyword == "grouping" {
-            if let Some(name) = &child.argument {
-                groups.insert(name.clone(), child.children.clone());
+    for source in parsed_modules.iter().filter(|candidate| {
+        candidate.name == module.name || candidate.belongs_to.as_deref() == Some(module.name.as_str())
+    }) {
+        for child in &source.children {
+            if child.keyword == "grouping" {
+                if let Some(name) = &child.argument {
+                    groups.insert(name.clone(), child.children.clone());
+                }
             }
         }
     }
