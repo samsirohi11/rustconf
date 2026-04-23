@@ -35,6 +35,12 @@ cargo run -p coreconf-cli -- serve --bundle target/basic.bundle.json --db target
 cargo run -p coreconf-cli -- inspect --bundle target/basic.bundle.json --db target/runtime.db
 ```
 
+## Phase 2C Compiler Commands
+
+```bash
+cargo run -p coreconf-cli -- compile crates/coreconf-compiler/tests/fixtures/phase2c-service.yin crates/coreconf-compiler/tests/fixtures/phase2c-common.yang --bundle-out target/phase2c.bundle.json --sid-out target/phase2c.sid.json --yang-out target/phase2c.normalized.yang --yin-out target/phase2c.normalized.yin
+```
+
 ## Quick Start
 
 Add to your `Cargo.toml`:

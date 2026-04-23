@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 #[derive(Args)]
 pub struct CompileArgs {
-    pub input: PathBuf,
+    #[arg(required = true)]
+    pub input: Vec<PathBuf>,
     #[arg(long)]
     pub bundle_out: PathBuf,
     #[arg(long)]
@@ -20,7 +21,7 @@ pub struct CompileArgs {
 }
 
 pub fn run(args: CompileArgs) -> Result<(), String> {
-    let bundle = compile_paths(&[args.input]).map_err(|err| err.to_string())?;
+    let bundle = compile_paths(&args.input).map_err(|err| err.to_string())?;
     write_output(
         &args.bundle_out,
         emit_bundle_json(&bundle).map_err(|err| err.to_string())?,
