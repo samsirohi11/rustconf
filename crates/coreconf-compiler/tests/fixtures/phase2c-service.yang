@@ -1,0 +1,22 @@
+module phase2c-service {
+  namespace "urn:phase2c-service";
+  prefix svc;
+
+  import phase2c-common { prefix common; }
+
+  container service {
+    container endpoint {
+      uses common:endpoint-fields {
+        refine "name" {
+          must "string-length(.) >= 3";
+        }
+        refine "tls" {
+          when "../enabled = 'true'";
+        }
+        augment "tls" {
+          leaf mode { type string; }
+        }
+      }
+    }
+  }
+}

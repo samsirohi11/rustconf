@@ -182,6 +182,9 @@ fn collect_context(module: &AstModule, parsed_modules: &[AstModule]) -> ModuleCo
                 "grouping" => {
                     if let Some(name) = &child.argument {
                         context.groupings.insert(name.clone(), child.children.clone());
+                        context
+                            .groupings
+                            .insert(format!("{}:{}", source.name, name), child.children.clone());
                     }
                 }
                 "typedef" | "identity" => extend_definition(
@@ -217,7 +220,7 @@ fn lower_statements(
             "namespace" | "prefix" | "typedef" | "grouping" | "import" | "include" => {}
             "uses" => {
                 if let Some(name) = &statement.argument {
-                    if let Some(group_children) = context.groupings.get(name) {
+                    if let Some(group_children) = context.groupings.get(&resolve_grouping_name(name, context)) {
                         lowered.extend(lower_statements(
                             group_children,
                             parent_path,
@@ -225,6 +228,8 @@ fn lower_statements(
                             nodes,
                             operations,
                         )?);
+                        apply_uses_refines(parent_path, statement, nodes)?;
+                        apply_uses_augments(parent_path, statement, context, nodes, operations)?;
                     }
                 }
             }
@@ -431,9 +436,67 @@ fn extend_definitions_from_owner(
         for child in &source.children {
             if matches!(child.keyword.as_str(), "typedef" | "identity") {
                 extend_definition(child, &owner_context, &mut target.typedefs, &mut target.identities);
+            } else if child.keyword == "grouping" {
+                if let Some(name) = &child.argument {
+                    target
+                        .groupings
+                        .insert(format!("{}:{}", owner.name, name), child.children.clone());
+                }
             }
         }
     }
+}
+
+fn resolve_grouping_name(name: &str, context: &ModuleContext) -> String {
+    if let Some((prefix, local_name)) = name.split_once(':') {
+        let module_name = context
+            .imports
+            .get(prefix)
+            .cloned()
+            .unwrap_or_else(|| context.module_name.clone());
+        format!("{module_name}:{local_name}")
+    } else {
+        name.to_string()
+    }
+}
+
+fn apply_uses_refines(
+    parent_path: &str,
+    statement: &AstStatement,
+    nodes: &mut BTreeMap<String, SchemaNode>,
+) -> Result<(), ValidationError> {
+    for refine in statement.children.iter().filter(|child| child.keyword == "refine") {
+        let target = normalize_leafref_path(parent_path, refine.argument.as_deref().unwrap_or_default());
+        let Some(node) = nodes.get_mut(&target) else {
+            return Err(ValidationError::Parse(format!("unknown refine target: {target}")));
+        };
+        for child in &refine.children {
+            match child.keyword.as_str() {
+                "must" => {
+                    if let Some(expr) = &child.argument {
+                        node.must.push(expr.clone());
+                    }
+                }
+                "when" => node.when = child.argument.clone(),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_uses_augments(
+    parent_path: &str,
+    statement: &AstStatement,
+    context: &ModuleContext,
+    nodes: &mut BTreeMap<String, SchemaNode>,
+    operations: &mut BTreeMap<String, OperationSchema>,
+) -> Result<(), ValidationError> {
+    for augment in statement.children.iter().filter(|child| child.keyword == "augment") {
+        let target = normalize_leafref_path(parent_path, augment.argument.as_deref().unwrap_or_default());
+        lower_statements(&augment.children, &target, context, nodes, operations)?;
+    }
+    Ok(())
 }
 
 fn extend_definition(

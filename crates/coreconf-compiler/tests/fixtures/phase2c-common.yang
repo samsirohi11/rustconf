@@ -1,0 +1,11 @@
+module phase2c-common {
+  namespace "urn:phase2c-common";
+  prefix common;
+
+  grouping endpoint-fields {
+    leaf name { type string; }
+    container tls {
+      leaf enabled { type boolean; }
+    }
+  }
+}
