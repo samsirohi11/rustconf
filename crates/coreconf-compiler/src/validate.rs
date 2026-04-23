@@ -38,7 +38,7 @@ pub fn compile_paths(paths: &[PathBuf]) -> Result<CompiledSchemaBundle, Validati
 
     let parsed_modules: Vec<AstModule> = repo
         .iter()
-        .map(|(_, source)| crate::parse_module(source).map_err(ValidationError::Parse))
+        .map(|entry| crate::parse_source(&entry.path, &entry.source).map_err(ValidationError::Parse))
         .collect::<Result<_, _>>()?;
 
     for module in &parsed_modules {

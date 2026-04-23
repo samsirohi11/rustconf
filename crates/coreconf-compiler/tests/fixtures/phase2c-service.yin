@@ -1,0 +1,9 @@
+<module name="phase2c-service" xmlns="urn:ietf:params:xml:ns:yang:yin:1">
+  <namespace uri="urn:phase2c-service"/>
+  <prefix value="svc"/>
+  <container name="service">
+    <leaf name="name">
+      <type name="string"/>
+    </leaf>
+  </container>
+</module>
