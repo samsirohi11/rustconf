@@ -1,17 +1,9 @@
 use assert_cmd::Command;
+use predicates::str::contains;
 use tempfile::tempdir;
 
 #[test]
-fn prints_serve_help() {
-    Command::cargo_bin("coreconf")
-        .unwrap()
-        .args(["serve", "--help"])
-        .assert()
-        .success();
-}
-
-#[test]
-fn serve_bootstraps_sqlite_runtime_db() {
+fn inspect_reports_active_schema_and_audit_count() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("coreconf-compiler")
@@ -50,5 +42,17 @@ fn serve_bootstraps_sqlite_runtime_db() {
         .assert()
         .success();
 
-    assert!(db.exists());
+    Command::cargo_bin("coreconf")
+        .unwrap()
+        .args([
+            "inspect",
+            "--bundle",
+            bundle.to_str().unwrap(),
+            "--db",
+            db.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(contains("active schema version"))
+        .stdout(contains("audit events:"));
 }

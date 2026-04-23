@@ -28,6 +28,13 @@ cargo run -p coreconf-cli -- compile crates/coreconf-compiler/tests/fixtures/bas
 cargo run -p coreconf-cli -- compile crates/coreconf-compiler/tests/fixtures/basic-module.yang --bundle-out target/basic.bundle.json --sid-out target/basic.sid.json --tree-out target/basic.tree.txt --yang-out target/basic.normalized.yang --yin-out target/basic.normalized.yin
 ```
 
+## Phase 2B Runtime Commands
+
+```bash
+cargo run -p coreconf-cli -- serve --bundle target/basic.bundle.json --db target/runtime.db --seed-json "{\"demo:greeting\":{\"message\":\"hello\"}}"
+cargo run -p coreconf-cli -- inspect --bundle target/basic.bundle.json --db target/runtime.db
+```
+
 ## Quick Start
 
 Add to your `Cargo.toml`:
