@@ -1,3 +1,4 @@
+use coreconf_schema::CompiledSchemaBundle;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -9,6 +10,14 @@ pub struct OperationRegistry {
 }
 
 impl OperationRegistry {
+    pub fn from_bundle(bundle: &CompiledSchemaBundle) -> Self {
+        let mut registry = Self::default();
+        for path in bundle.operations.keys() {
+            registry.register(path, |_| Ok(Value::Null));
+        }
+        registry
+    }
+
     pub fn register<F>(&mut self, path: &str, handler: F)
     where
         F: Fn(Value) -> Result<Value, String> + Send + Sync + 'static,

@@ -167,24 +167,45 @@ impl SidFile {
         let mut ids = HashMap::new();
         let mut types = HashMap::new();
         let mut key_mapping = HashMap::new();
+        let mut next_sid = bundle
+            .nodes
+            .values()
+            .filter_map(|node| node.sid)
+            .max()
+            .unwrap_or(60000);
 
         for node in bundle.nodes.values() {
-            if let Some(sid) = node.sid {
-                sids.insert(node.path.clone(), sid);
-                ids.insert(sid, node.path.clone());
-                if let Some(yang_type) = &node.yang_type {
-                    types.insert(node.path.clone(), schema_to_yang(yang_type));
-                }
+            let sid = node.sid.unwrap_or_else(|| {
+                next_sid += 1;
+                next_sid
+            });
 
-                let keys: Vec<i64> = node
-                    .keys
-                    .iter()
-                    .filter_map(|key_path| bundle.nodes.get(key_path).and_then(|key_node| key_node.sid))
-                    .collect();
-                if !keys.is_empty() {
-                    key_mapping.insert(sid, keys);
-                }
+            sids.insert(node.path.clone(), sid);
+            ids.insert(sid, node.path.clone());
+            if let Some(yang_type) = &node.yang_type {
+                types.insert(node.path.clone(), schema_to_yang(yang_type));
             }
+
+            let keys: Vec<i64> = node
+                .keys
+                .iter()
+                .filter_map(|key_path| {
+                    if let Some(key_node) = bundle.nodes.get(key_path) {
+                        key_node.sid.or_else(|| sids.get(key_path).copied())
+                    } else {
+                        sids.get(key_path).copied()
+                    }
+                })
+                .collect();
+            if !keys.is_empty() {
+                key_mapping.insert(sid, keys);
+            }
+        }
+
+        for path in bundle.operations.keys() {
+            next_sid += 1;
+            sids.insert(path.clone(), next_sid);
+            ids.insert(next_sid, path.clone());
         }
 
         Self {
