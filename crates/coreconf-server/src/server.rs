@@ -33,6 +33,7 @@ where
             actor: "system".into(),
             action: format!("{:?}", request.method),
             resource: "/c".into(),
+            token: None,
         });
 
         self.handler.as_mut().map(|handler| handler.handle(request)).unwrap_or_else(|| {
