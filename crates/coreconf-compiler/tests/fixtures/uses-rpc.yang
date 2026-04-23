@@ -1,0 +1,30 @@
+module uses-rpc {
+  namespace "urn:uses-rpc";
+  prefix ur;
+
+  import imported-types { prefix types; }
+
+  grouping user-fields {
+    leaf username { type types:username; }
+  }
+
+  container users {
+    list user {
+      key "username";
+      uses user-fields;
+      leaf enabled {
+        type boolean;
+        must "../username";
+      }
+    }
+  }
+
+  rpc reset-user {
+    input {
+      leaf username { type types:username; }
+    }
+    output {
+      leaf accepted { type boolean; }
+    }
+  }
+}

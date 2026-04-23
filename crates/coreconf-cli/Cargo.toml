@@ -1,0 +1,24 @@
+[package]
+name = "coreconf-cli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "coreconf"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+coreconf-compiler = { path = "../coreconf-compiler" }
+coreconf-schema = { path = "../coreconf-schema" }
+coreconf-server = { path = "../coreconf-server" }
+rust-coreconf = { path = "../coreconf-data" }
+serde_json = "1.0"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+tempfile = "3.14"

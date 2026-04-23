@@ -1,0 +1,10 @@
+module demo {
+  namespace "urn:demo";
+  prefix demo;
+
+  container greeting {
+    leaf message {
+      type string;
+    }
+  }
+}

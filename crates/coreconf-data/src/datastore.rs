@@ -6,6 +6,7 @@
 use crate::coreconf::CoreconfModel;
 use crate::error::{CoreconfError, Result};
 use crate::instance_id::InstancePath;
+use crate::path::{PathExpr, Predicate};
 use serde_json::{Map, Value};
 
 /// Unified datastore for YANG data
@@ -226,6 +227,212 @@ impl Datastore {
         }
         Ok(())
     }
+
+    /// Get a value by a path expression with optional list predicates.
+    pub fn get_path_expr(&self, input: &str) -> Result<Option<Value>> {
+        let expr = PathExpr::parse(input)?;
+        let mut current = &self.data;
+
+        for segment in &expr.segments {
+            let child = get_object_child(current, &segment.name)?;
+            if segment.predicates.is_empty() {
+                current = child;
+            } else {
+                let array = child.as_array().ok_or_else(|| {
+                    CoreconfError::ValidationError(format!("expected list node at {}", segment.name))
+                })?;
+                current = array
+                    .iter()
+                    .find(|entry| predicates_match(entry, &segment.predicates))
+                    .ok_or_else(|| CoreconfError::ResourceNotFound(input.to_string()))?;
+            }
+        }
+
+        Ok(Some(current.clone()))
+    }
+
+    /// Set a value by a path expression with optional list predicates.
+    pub fn set_path_expr(&mut self, input: &str, value: Value) -> Result<()> {
+        let expr = PathExpr::parse(input)?;
+        upsert_segments(&mut self.data, &expr.segments, value)
+    }
+
+    /// Delete a value by a path expression with optional list predicates.
+    pub fn delete_path_expr(&mut self, input: &str) -> Result<bool> {
+        let expr = PathExpr::parse(input)?;
+        delete_segments(&mut self.data, &expr.segments)
+    }
+
+    /// List predicate selectors for all entries in a YANG list.
+    pub fn predicates(&self, input: &str) -> Result<Vec<String>> {
+        let expr = PathExpr::parse(input)?;
+        let list_path = format!(
+            "/{}",
+            expr.segments
+                .iter()
+                .map(|segment| segment.name.as_str())
+                .collect::<Vec<_>>()
+                .join("/")
+        );
+        let node = self
+            .model
+            .schema
+            .get_node(&list_path)
+            .ok_or_else(|| CoreconfError::ResourceNotFound(list_path.clone()))?;
+        let list_value = self
+            .get_path_expr(input)?
+            .ok_or_else(|| CoreconfError::ResourceNotFound(input.to_string()))?;
+        let array = list_value.as_array().ok_or_else(|| {
+            CoreconfError::ValidationError(format!("expected list array at {}", input))
+        })?;
+
+        let mut values = array
+            .iter()
+            .filter_map(|entry| {
+                let object = entry.as_object()?;
+                let parts: Vec<String> = node
+                    .keys
+                    .iter()
+                    .filter_map(|key_path| {
+                        let key_name = key_path.split('/').next_back().unwrap_or(key_path);
+                        object.get(key_name).map(|value| {
+                            format!("[{}='{}']", key_name, value.as_str().unwrap_or_default())
+                        })
+                    })
+                    .collect();
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(parts.join(""))
+                }
+            })
+            .collect::<Vec<_>>();
+        values.sort();
+        Ok(values)
+    }
+}
+
+fn get_object_child<'a>(current: &'a Value, key: &str) -> Result<&'a Value> {
+    let object = current.as_object().ok_or_else(|| {
+        CoreconfError::ValidationError(format!("expected object while resolving {}", key))
+    })?;
+
+    object
+        .get(key)
+        .or_else(|| object.get(key.split(':').next_back().unwrap_or(key)))
+        .ok_or_else(|| CoreconfError::ResourceNotFound(key.to_string()))
+}
+
+fn predicates_match(entry: &Value, predicates: &[Predicate]) -> bool {
+    let object = match entry.as_object() {
+        Some(object) => object,
+        None => return false,
+    };
+
+    predicates.iter().all(|predicate| {
+        object
+            .get(&predicate.key)
+            .and_then(|value| value.as_str())
+            .map(|value| value == predicate.value)
+            .unwrap_or(false)
+    })
+}
+
+fn upsert_segments(current: &mut Value, segments: &[crate::path::PathSegment], value: Value) -> Result<()> {
+    if segments.is_empty() {
+        *current = value;
+        return Ok(());
+    }
+
+    let segment = &segments[0];
+    let is_last = segments.len() == 1;
+    let object = current.as_object_mut().ok_or_else(|| {
+        CoreconfError::ValidationError(format!("expected object while setting {}", segment.name))
+    })?;
+
+    if segment.predicates.is_empty() {
+        if is_last {
+            object.insert(segment.name.clone(), value);
+            return Ok(());
+        }
+
+        let child = object
+            .entry(segment.name.clone())
+            .or_insert_with(|| Value::Object(Map::new()));
+        return upsert_segments(child, &segments[1..], value);
+    }
+
+    let list_value = object
+        .entry(segment.name.clone())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let array = list_value.as_array_mut().ok_or_else(|| {
+        CoreconfError::ValidationError(format!("expected list at {}", segment.name))
+    })?;
+
+    let index = array
+        .iter()
+        .position(|entry| predicates_match(entry, &segment.predicates))
+        .unwrap_or_else(|| {
+            let mut entry = Map::new();
+            for predicate in &segment.predicates {
+                entry.insert(predicate.key.clone(), Value::String(predicate.value.clone()));
+            }
+            array.push(Value::Object(entry));
+            array.len() - 1
+        });
+
+    if is_last {
+        array[index] = value;
+        return Ok(());
+    }
+
+    upsert_segments(&mut array[index], &segments[1..], value)
+}
+
+fn delete_segments(current: &mut Value, segments: &[crate::path::PathSegment]) -> Result<bool> {
+    if segments.is_empty() {
+        return Ok(false);
+    }
+
+    let segment = &segments[0];
+    let is_last = segments.len() == 1;
+    let object = current.as_object_mut().ok_or_else(|| {
+        CoreconfError::ValidationError(format!("expected object while deleting {}", segment.name))
+    })?;
+
+    if segment.predicates.is_empty() {
+        if is_last {
+            return Ok(object.remove(&segment.name).is_some());
+        }
+
+        if let Some(child) = object.get_mut(&segment.name) {
+            return delete_segments(child, &segments[1..]);
+        }
+
+        return Ok(false);
+    }
+
+    let list_value = match object.get_mut(&segment.name) {
+        Some(value) => value,
+        None => return Ok(false),
+    };
+    let array = list_value.as_array_mut().ok_or_else(|| {
+        CoreconfError::ValidationError(format!("expected list at {}", segment.name))
+    })?;
+
+    if let Some(index) = array
+        .iter()
+        .position(|entry| predicates_match(entry, &segment.predicates))
+    {
+        if is_last {
+            array.remove(index);
+            return Ok(true);
+        }
+
+        return delete_segments(&mut array[index], &segments[1..]);
+    }
+
+    Ok(false)
 }
 
 #[cfg(test)]

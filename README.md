@@ -5,6 +5,42 @@
 
 A Rust implementation of **CORECONF** (CoAP Management Interface) per [draft-ietf-core-comi](https://datatracker.ietf.org/doc/draft-ietf-core-comi/), enabling efficient management of YANG data models over constrained networks using CoAP and CBOR encoding.
 
+This repository is now organized as a **workspace** for a generalized CORECONF platform: compiler, schema bundle, runtime data layer, server foundations, and admin CLI.
+
+## Workspace
+
+- `crates/coreconf-schema` — compiled schema bundle types
+- `crates/coreconf-data` — bundle-backed CORECONF codec and datastore (`rust-coreconf`)
+- `crates/coreconf-compiler` — YANG parser, validator, and emitters
+- `crates/coreconf-server` — persistence, auth hooks, audit, and request handling
+- `crates/coreconf-cli` — `coreconf` admin CLI
+
+## Phase 1 Commands
+
+```bash
+cargo test -q
+cargo run -p coreconf-cli -- compile crates/coreconf-compiler/tests/fixtures/basic-module.yang --bundle-out target/basic.bundle.json --sid-out target/basic.sid.json
+```
+
+## Phase 2A Compiler Commands
+
+```bash
+cargo run -p coreconf-cli -- compile crates/coreconf-compiler/tests/fixtures/basic-module.yang --bundle-out target/basic.bundle.json --sid-out target/basic.sid.json --tree-out target/basic.tree.txt --yang-out target/basic.normalized.yang --yin-out target/basic.normalized.yin
+```
+
+## Phase 2B Runtime Commands
+
+```bash
+cargo run -p coreconf-cli -- serve --bundle target/basic.bundle.json --db target/runtime.db --seed-json "{\"demo:greeting\":{\"message\":\"hello\"}}"
+cargo run -p coreconf-cli -- inspect --bundle target/basic.bundle.json --db target/runtime.db
+```
+
+## Phase 2C Compiler Commands
+
+```bash
+cargo run -p coreconf-cli -- compile crates/coreconf-compiler/tests/fixtures/phase2c-service.yin crates/coreconf-compiler/tests/fixtures/phase2c-common.yang --bundle-out target/phase2c.bundle.json --sid-out target/phase2c.sid.json --yang-out target/phase2c.normalized.yang --yin-out target/phase2c.normalized.yin
+```
+
 ## Quick Start
 
 Add to your `Cargo.toml`:
@@ -78,7 +114,7 @@ This makes CORECONF ideal for resource-constrained devices where bandwidth and p
 | **iPATCH** | iPATCH      | Modify specific data nodes (set SID-value or SID-null) |
 | **POST**   | POST        | Invoke YANG RPC or action operations                   |
 
-## Architecture
+## Legacy Data-Layer Layout
 
 ```
 src/

@@ -238,6 +238,10 @@ pub struct Request {
     pub content_format: Option<ContentFormat>,
     /// Parsed query parameters
     pub query: QueryParams,
+    /// Optional actor identity supplied by the caller
+    pub actor: Option<String>,
+    /// Optional authentication token supplied by the caller
+    pub auth_token: Option<String>,
 }
 
 impl Request {
@@ -248,6 +252,8 @@ impl Request {
             payload: Vec::new(),
             content_format: None,
             query: QueryParams::default(),
+            actor: None,
+            auth_token: None,
         }
     }
 
@@ -261,6 +267,18 @@ impl Request {
     /// Set query parameters
     pub fn with_query(mut self, query: QueryParams) -> Self {
         self.query = query;
+        self
+    }
+
+    /// Set actor identity
+    pub fn with_actor(mut self, actor: impl Into<String>) -> Self {
+        self.actor = Some(actor.into());
+        self
+    }
+
+    /// Set authentication token
+    pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
+        self.auth_token = Some(token.into());
         self
     }
 }
