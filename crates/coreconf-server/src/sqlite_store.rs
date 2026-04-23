@@ -1,5 +1,6 @@
 use crate::audit::AuditEvent;
 use crate::store::Store;
+use coreconf_schema::CompiledSchemaBundle;
 use rusqlite::{params, Connection};
 use serde_json::Value;
 use std::path::Path;
@@ -13,9 +14,17 @@ impl SqliteStore {
         let conn = Connection::open(path).map_err(|err| err.to_string())?;
         conn.execute_batch(
             "
+            create table if not exists bundles (
+                schema_version text primary key,
+                bundle_json text not null
+            );
             create table if not exists snapshots (
                 schema_version text primary key,
                 snapshot_json text not null
+            );
+            create table if not exists server_state (
+                id integer primary key check (id = 1),
+                active_schema_version text
             );
             create table if not exists audit_events (
                 id integer primary key autoincrement,
@@ -23,6 +32,7 @@ impl SqliteStore {
                 action text not null,
                 resource text not null
             );
+            insert or ignore into server_state (id, active_schema_version) values (1, null);
             ",
         )
         .map_err(|err| err.to_string())?;
@@ -31,6 +41,60 @@ impl SqliteStore {
 }
 
 impl Store for SqliteStore {
+    fn write_bundle(
+        &mut self,
+        schema_version: &str,
+        bundle: &CompiledSchemaBundle,
+    ) -> Result<(), String> {
+        let bundle_json = serde_json::to_string(bundle).map_err(|err| err.to_string())?;
+        self.conn
+            .execute(
+                "insert or replace into bundles (schema_version, bundle_json) values (?1, ?2)",
+                params![schema_version, bundle_json],
+            )
+            .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    fn read_bundle(&self, schema_version: &str) -> Result<Option<CompiledSchemaBundle>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("select bundle_json from bundles where schema_version = ?1")
+            .map_err(|err| err.to_string())?;
+        let mut rows = stmt.query(params![schema_version]).map_err(|err| err.to_string())?;
+        match rows.next().map_err(|err| err.to_string())? {
+            Some(row) => {
+                let json: String = row.get(0).map_err(|err| err.to_string())?;
+                serde_json::from_str(&json)
+                    .map(Some)
+                    .map_err(|err| err.to_string())
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn set_active_schema_version(&mut self, schema_version: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "update server_state set active_schema_version = ?1 where id = 1",
+                params![schema_version],
+            )
+            .map_err(|err| err.to_string())?;
+        Ok(())
+    }
+
+    fn active_schema_version(&self) -> Result<Option<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("select active_schema_version from server_state where id = 1")
+            .map_err(|err| err.to_string())?;
+        let mut rows = stmt.query([]).map_err(|err| err.to_string())?;
+        match rows.next().map_err(|err| err.to_string())? {
+            Some(row) => row.get(0).map_err(|err| err.to_string()),
+            None => Ok(None),
+        }
+    }
+
     fn write_snapshot(&mut self, schema_version: &str, snapshot: &Value) -> Result<(), String> {
         self.conn
             .execute(
