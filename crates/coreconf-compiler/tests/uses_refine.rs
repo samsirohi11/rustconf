@@ -12,7 +12,7 @@ fn expands_imported_groupings_and_applies_uses_refine_and_augment() {
     );
     assert_eq!(
         bundle.nodes["/phase2c-service:service/endpoint/tls"].when.as_deref(),
-        Some("../enabled = 'true'")
+        Some("./enabled = 'true'")
     );
     assert!(bundle
         .nodes

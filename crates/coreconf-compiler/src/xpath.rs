@@ -10,3 +10,11 @@ pub fn validate_xpath(input: &str) -> Result<(), XPathError> {
     }
     Ok(())
 }
+
+pub fn referenced_paths(input: &str) -> Vec<String> {
+    input
+        .split(|ch: char| ch.is_whitespace() || matches!(ch, '=' | '(' | ')' | ',' | '\'' | '"' | '>' | '<'))
+        .filter(|token| token.starts_with('/') || token.starts_with("./") || token.starts_with("../") || *token == ".")
+        .map(ToString::to_string)
+        .collect()
+}

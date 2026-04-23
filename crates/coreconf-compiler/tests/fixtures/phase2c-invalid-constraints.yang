@@ -1,0 +1,16 @@
+module phase2c-invalid-constraints {
+  namespace "urn:phase2c-invalid-constraints";
+  prefix invalid;
+
+  container service {
+    leaf enabled { type boolean; }
+    leaf name {
+      type string;
+      must "../missing";
+    }
+    container tls {
+      when "../missing = 'true'";
+      leaf mode { type string; }
+    }
+  }
+}

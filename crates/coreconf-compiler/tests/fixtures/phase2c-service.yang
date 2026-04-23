@@ -11,7 +11,7 @@ module phase2c-service {
           must "string-length(.) >= 3";
         }
         refine "tls" {
-          when "../enabled = 'true'";
+          when "./enabled = 'true'";
         }
         augment "tls" {
           leaf mode { type string; }

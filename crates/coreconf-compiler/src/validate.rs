@@ -133,6 +133,8 @@ pub fn compile_paths(paths: &[PathBuf]) -> Result<CompiledSchemaBundle, Validati
         }
     }
 
+    validate_constraint_targets(&bundle.nodes)?;
+
     Ok(bundle)
 }
 
@@ -458,6 +460,28 @@ fn resolve_grouping_name(name: &str, context: &ModuleContext) -> String {
     } else {
         name.to_string()
     }
+}
+
+fn validate_constraint_targets(nodes: &BTreeMap<String, SchemaNode>) -> Result<(), ValidationError> {
+    for (path, node) in nodes {
+        for expression in node
+            .must
+            .iter()
+            .chain(node.when.iter())
+        {
+            validate_xpath(expression)?;
+            for reference in crate::xpath::referenced_paths(expression) {
+                let normalized = normalize_leafref_path(path, &reference);
+                if normalized != *path && !nodes.contains_key(&normalized) {
+                    return Err(ValidationError::InvalidXPath(format!(
+                        "{} -> {}",
+                        expression, normalized
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn apply_uses_refines(
