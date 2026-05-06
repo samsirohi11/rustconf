@@ -93,3 +93,12 @@ fn test_handler_ipatch() {
     let value = handler.datastore().get_by_sid(60002).unwrap();
     assert_eq!(value, Some(serde_json::json!("General Kenobi")));
 }
+
+#[test]
+fn facade_reexports_new_workspace_types() {
+    use rust_coreconf::{CompositeModel, Datastore, RequestHandler};
+    
+    let _ = std::any::type_name::<CompositeModel>();
+    let _ = std::any::type_name::<Datastore>();
+    let _ = std::any::type_name::<RequestHandler>();
+}

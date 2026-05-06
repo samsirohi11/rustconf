@@ -1,3 +1,12 @@
+[workspace]
+members = [
+    ".",
+    "crates/coreconf-model",
+    "crates/coreconf-runtime",
+    "crates/coreconf-cli",
+]
+resolver = "2"
+
 [package]
 name = "rust-coreconf"
 version = "0.1.0"
@@ -9,17 +18,15 @@ license = "GPL-3.0"
 readme = "README.md"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-ciborium = "0.2"
-base64 = "0.22"
-thiserror = "2.0"
+coreconf-model = { path = "crates/coreconf-model" }
+coreconf-runtime = { path = "crates/coreconf-runtime" }
 
 [dev-dependencies]
-tempfile = "3.14"
 hex = "0.4"
+tempfile = "3.14"
 coap-lite = "0.13"
 clap = { version = "4.0", features = ["derive"] }
 ctrlc = "3.4"
+serde_json = "1.0"
 
 
