@@ -5,7 +5,7 @@ pub mod memory_backend;
 pub mod operations;
 pub mod path;
 pub mod request_handler;
-pub mod transport {}
+pub mod transport;
 
 pub use backend::Backend;
 pub use datastore::Datastore;
