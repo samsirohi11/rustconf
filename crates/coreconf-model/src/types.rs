@@ -33,27 +33,41 @@ pub enum YangType {
 }
 
 impl YangType {
-    pub fn from_sid_type(type_value: &Value) -> Self {
+    pub fn from_sid_type(type_value: &Value) -> Result<Self> {
         match type_value {
-            Value::String(s) => Self::from_string(s),
+            Value::String(s) => Self::strict_from_string(s),
             Value::Object(map) => {
-                let enum_map: HashMap<String, i64> = map
-                    .iter()
-                    .filter_map(|(k, v)| {
-                        v.as_str()
-                            .map(|name| (name.to_string(), k.parse().unwrap_or(0)))
-                    })
-                    .collect();
-                YangType::Enumeration(enum_map)
+                let mut enum_map = HashMap::with_capacity(map.len());
+                for (raw_value, name) in map {
+                    let name = name.as_str().ok_or_else(|| {
+                        CoreconfError::InvalidSidFile(format!(
+                            "enumeration entry '{raw_value}' must map to a string name"
+                        ))
+                    })?;
+                    let numeric_value = raw_value.parse().map_err(|_| {
+                        CoreconfError::InvalidSidFile(format!(
+                            "enumeration value '{raw_value}' is not a valid i64"
+                        ))
+                    })?;
+                    enum_map.insert(name.to_string(), numeric_value);
+                }
+                Ok(YangType::Enumeration(enum_map))
             }
             Value::Array(arr) => {
-                let types: Vec<YangType> = arr
-                    .iter()
-                    .filter_map(|v| v.as_str().map(Self::from_string))
-                    .collect();
-                YangType::Union(types)
+                let mut types = Vec::with_capacity(arr.len());
+                for entry in arr {
+                    let type_name = entry.as_str().ok_or_else(|| {
+                        CoreconfError::InvalidSidFile(format!(
+                            "union member must be a string, got {entry:?}"
+                        ))
+                    })?;
+                    types.push(Self::strict_from_string(type_name)?);
+                }
+                Ok(YangType::Union(types))
             }
-            _ => YangType::Unknown("invalid".to_string()),
+            _ => Err(CoreconfError::InvalidSidFile(format!(
+                "unsupported SID type metadata: {type_value:?}"
+            ))),
         }
     }
 
@@ -80,6 +94,16 @@ impl YangType {
             other => YangType::Unknown(other.to_string()),
         }
     }
+
+    fn strict_from_string(s: &str) -> Result<Self> {
+        let yang_type = Self::from_string(s);
+        if matches!(yang_type, YangType::Unknown(_)) {
+            return Err(CoreconfError::InvalidSidFile(format!(
+                "unknown YANG type '{s}'"
+            )));
+        }
+        Ok(yang_type)
+    }
 }
 
 pub fn cast_to_coreconf(
@@ -89,7 +113,12 @@ pub fn cast_to_coreconf(
 ) -> Result<Value> {
     match yang_type {
         YangType::String | YangType::Uri => {
-            Ok(Value::String(value.as_str().unwrap_or("").to_string()))
+            let s = value.as_str().ok_or_else(|| {
+                CoreconfError::TypeConversion(format!(
+                    "cannot convert {value:?} to string-compatible value"
+                ))
+            })?;
+            Ok(Value::String(s.to_string()))
         }
         YangType::Int8 | YangType::Int16 | YangType::Int32 | YangType::Int64 => {
             let n = value_to_i64(value)?;
@@ -101,12 +130,20 @@ pub fn cast_to_coreconf(
         }
         YangType::Decimal64 => {
             let f = value_to_f64(value)?;
-            Ok(serde_json::Number::from_f64(f)
+            serde_json::Number::from_f64(f)
                 .map(Value::Number)
-                .unwrap_or(Value::Null))
+                .ok_or_else(|| {
+                    CoreconfError::TypeConversion(format!(
+                        "cannot represent {f} as decimal64 JSON number"
+                    ))
+                })
         }
         YangType::Binary => {
-            let s = value.as_str().unwrap_or("");
+            let s = value.as_str().ok_or_else(|| {
+                CoreconfError::TypeConversion(format!(
+                    "cannot convert {value:?} to base64-encoded binary string"
+                ))
+            })?;
             let bytes = BASE64
                 .decode(s)
                 .map_err(|e| CoreconfError::TypeConversion(format!("base64 decode: {e}")))?;
@@ -117,19 +154,42 @@ pub fn cast_to_coreconf(
         YangType::Boolean => {
             let b = match value {
                 Value::Bool(b) => *b,
-                Value::String(s) => s == "true",
-                _ => false,
+                Value::String(s) => match s.as_str() {
+                    "true" => true,
+                    "false" => false,
+                    _ => {
+                        return Err(CoreconfError::TypeConversion(format!(
+                            "cannot parse '{s}' as boolean"
+                        )));
+                    }
+                },
+                _ => {
+                    return Err(CoreconfError::TypeConversion(format!(
+                        "cannot convert {value:?} to boolean"
+                    )));
+                }
             };
             Ok(Value::Bool(b))
         }
         YangType::Identityref => {
-            if let (Some(s), Some(lookup)) = (value.as_str(), sid_lookup)
-                && let Some((_module, identity)) = s.split_once(':')
-                && let Some(sid) = lookup(identity)
-            {
-                return Ok(Value::Number(sid.into()));
-            }
-            Ok(value.clone())
+            let s = value.as_str().ok_or_else(|| {
+                CoreconfError::TypeConversion(format!(
+                    "cannot convert {value:?} to identityref"
+                ))
+            })?;
+            let lookup = sid_lookup.ok_or_else(|| {
+                CoreconfError::TypeConversion(
+                    "cannot convert identityref without SID lookup".to_string(),
+                )
+            })?;
+            let sid = lookup(s)
+                .or_else(|| s.split_once(':').and_then(|(_, identity)| lookup(identity)))
+                .ok_or_else(|| {
+                CoreconfError::TypeConversion(format!(
+                    "identityref value not found: {s}"
+                ))
+            })?;
+            Ok(Value::Number(sid.into()))
         }
         YangType::Enumeration(enum_map) => {
             if let Some(s) = value.as_str()
@@ -138,7 +198,9 @@ pub fn cast_to_coreconf(
                 return Ok(Value::Number(val.into()));
             }
             if let Some(n) = value.as_i64() {
-                return Ok(Value::Number(n.into()));
+                if enum_map.values().any(|&val| val == n) {
+                    return Ok(Value::Number(n.into()));
+                }
             }
             Err(CoreconfError::TypeConversion(format!(
                 "enumeration value not found: {value:?}"
@@ -153,7 +215,9 @@ pub fn cast_to_coreconf(
                     return Ok(v);
                 }
             }
-            Ok(value.clone())
+            Err(CoreconfError::TypeConversion(format!(
+                "value {value:?} does not match any union member"
+            )))
         }
         YangType::Unknown(_) => Ok(value.clone()),
     }
@@ -167,7 +231,12 @@ pub fn cast_from_coreconf(
 ) -> Result<Value> {
     match yang_type {
         YangType::String | YangType::Uri => {
-            Ok(Value::String(value.as_str().unwrap_or("").to_string()))
+            let s = value.as_str().ok_or_else(|| {
+                CoreconfError::TypeConversion(format!(
+                    "cannot convert {value:?} to string-compatible value"
+                ))
+            })?;
+            Ok(Value::String(s.to_string()))
         }
         YangType::Int8
         | YangType::Int16
@@ -177,51 +246,88 @@ pub fn cast_from_coreconf(
         | YangType::Uint16
         | YangType::Uint32
         | YangType::Uint64 => {
-            if let Some(n) = value.as_i64() {
-                Ok(Value::Number(n.into()))
-            } else if let Some(n) = value.as_u64() {
-                Ok(Value::Number(n.into()))
-            } else {
-                Ok(value.clone())
+            match yang_type {
+                YangType::Int8 | YangType::Int16 | YangType::Int32 | YangType::Int64 => {
+                    Ok(Value::Number(value_to_i64(value)?.into()))
+                }
+                YangType::Uint8 | YangType::Uint16 | YangType::Uint32 | YangType::Uint64 => {
+                    Ok(Value::Number(value_to_u64(value)?.into()))
+                }
+                _ => unreachable!(),
             }
         }
         YangType::Decimal64 => {
-            if let Some(f) = value.as_f64() {
-                Ok(serde_json::Number::from_f64(f)
-                    .map(Value::Number)
-                    .unwrap_or(Value::Null))
-            } else {
-                Ok(value.clone())
-            }
+            let f = value_to_f64(value)?;
+            serde_json::Number::from_f64(f)
+                .map(Value::Number)
+                .ok_or_else(|| {
+                    CoreconfError::TypeConversion(format!(
+                        "cannot represent {f} as decimal64 JSON number"
+                    ))
+                })
         }
         YangType::Binary => {
-            let bytes: Vec<u8> = match value {
-                Value::Array(arr) => arr
-                    .iter()
-                    .filter_map(|v| v.as_u64().map(|n| n as u8))
-                    .collect(),
-                _ => return Ok(value.clone()),
-            };
+            let arr = value.as_array().ok_or_else(|| {
+                CoreconfError::TypeConversion(format!(
+                    "cannot convert {value:?} to binary byte array"
+                ))
+            })?;
+            let mut bytes = Vec::with_capacity(arr.len());
+            for entry in arr {
+                let byte = entry.as_u64().ok_or_else(|| {
+                    CoreconfError::TypeConversion(format!(
+                        "binary value contains non-byte entry: {entry:?}"
+                    ))
+                })?;
+                let byte = u8::try_from(byte).map_err(|_| {
+                    CoreconfError::TypeConversion(format!(
+                        "binary value contains out-of-range byte: {byte}"
+                    ))
+                })?;
+                bytes.push(byte);
+            }
             Ok(Value::String(BASE64.encode(&bytes)))
         }
-        YangType::Boolean => Ok(Value::Bool(value.as_bool().unwrap_or(false))),
+        YangType::Boolean => {
+            let b = value.as_bool().ok_or_else(|| {
+                CoreconfError::TypeConversion(format!(
+                    "cannot convert {value:?} to boolean"
+                ))
+            })?;
+            Ok(Value::Bool(b))
+        }
         YangType::Identityref => {
-            if let (Some(sid), Some(lookup)) = (value.as_i64(), id_lookup)
-                && let Some(identifier) = lookup(sid)
-            {
-                return Ok(Value::String(format!("{module_name}:{identifier}")));
-            }
-            Ok(value.clone())
+            let sid = value.as_i64().ok_or_else(|| {
+                CoreconfError::TypeConversion(format!(
+                    "cannot convert {value:?} to identityref"
+                ))
+            })?;
+            let lookup = id_lookup.ok_or_else(|| {
+                CoreconfError::TypeConversion(
+                    "cannot convert identityref without identifier lookup".to_string(),
+                )
+            })?;
+            let identifier = lookup(sid).ok_or_else(|| {
+                CoreconfError::TypeConversion(format!(
+                    "identityref SID not found: {sid}"
+                ))
+            })?;
+            Ok(Value::String(format_identityref(&identifier, module_name)))
         }
         YangType::Enumeration(enum_map) => {
-            if let Some(n) = value.as_i64() {
-                for (name, &val) in enum_map {
-                    if val == n {
-                        return Ok(Value::String(name.clone()));
-                    }
+            let n = value.as_i64().ok_or_else(|| {
+                CoreconfError::TypeConversion(format!(
+                    "cannot convert {value:?} to enumeration value"
+                ))
+            })?;
+            for (name, &val) in enum_map {
+                if val == n {
+                    return Ok(Value::String(name.clone()));
                 }
             }
-            Ok(value.clone())
+            Err(CoreconfError::TypeConversion(format!(
+                "enumeration value not found for numeric value {n}"
+            )))
         }
         YangType::Empty | YangType::Leafref | YangType::InstanceIdentifier | YangType::Bits => {
             Ok(value.clone())
@@ -232,7 +338,9 @@ pub fn cast_from_coreconf(
                     return Ok(v);
                 }
             }
-            Ok(value.clone())
+            Err(CoreconfError::TypeConversion(format!(
+                "value {value:?} does not match any union member"
+            )))
         }
         YangType::Unknown(_) => Ok(value.clone()),
     }
@@ -280,6 +388,15 @@ fn value_to_f64(value: &Value) -> Result<f64> {
     }
 }
 
+fn format_identityref(identifier: &str, module_name: &str) -> String {
+    let normalized = identifier.trim_start_matches('/');
+    if normalized.contains(':') || module_name.is_empty() {
+        normalized.to_string()
+    } else {
+        format!("{module_name}:{normalized}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +428,59 @@ mod tests {
         let value = Value::String("true".to_string());
         let result = cast_to_coreconf(&value, &YangType::Boolean, None).unwrap();
         assert_eq!(result, Value::Bool(true));
+    }
+
+    #[test]
+    fn test_cast_string_rejects_non_strings() {
+        let value = Value::Number(42.into());
+        let err = cast_to_coreconf(&value, &YangType::String, None).unwrap_err();
+        assert!(matches!(err, CoreconfError::TypeConversion(message) if message.contains("string")));
+    }
+
+    #[test]
+    fn test_cast_boolean_rejects_invalid_strings() {
+        let value = Value::String("yes".to_string());
+        let err = cast_to_coreconf(&value, &YangType::Boolean, None).unwrap_err();
+        assert!(matches!(err, CoreconfError::TypeConversion(message) if message.contains("boolean")));
+    }
+
+    #[test]
+    fn test_cast_binary_from_coreconf_rejects_invalid_bytes() {
+        let value = Value::Array(vec![Value::Number(255.into()), Value::Number(256.into())]);
+        let err = cast_from_coreconf(&value, &YangType::Binary, None, "example").unwrap_err();
+        assert!(matches!(err, CoreconfError::TypeConversion(message) if message.contains("binary")));
+    }
+
+    #[test]
+    fn test_cast_identityref_rejects_unknown_identity() {
+        let value = Value::String("example:missing".to_string());
+        let lookup = |_identifier: &str| None;
+        let err = cast_to_coreconf(&value, &YangType::Identityref, Some(&lookup)).unwrap_err();
+        assert!(matches!(err, CoreconfError::TypeConversion(message) if message.contains("identityref")));
+    }
+
+    #[test]
+    fn test_cast_identityref_to_coreconf_accepts_qualified_names() {
+        let value = Value::String("example:up".to_string());
+        let lookup = |identifier: &str| (identifier == "example:up").then_some(42);
+        let converted = cast_to_coreconf(&value, &YangType::Identityref, Some(&lookup)).unwrap();
+        assert_eq!(converted, Value::Number(42.into()));
+    }
+
+    #[test]
+    fn test_cast_identityref_from_coreconf_preserves_qualified_names() {
+        let value = Value::Number(42.into());
+        let lookup = |_sid: i64| Some("example:up".to_string());
+        let converted =
+            cast_from_coreconf(&value, &YangType::Identityref, Some(&lookup), "example").unwrap();
+        assert_eq!(converted, Value::String("example:up".to_string()));
+    }
+
+    #[test]
+    fn test_cast_enumeration_rejects_unknown_numeric_values() {
+        let value = Value::Number(99.into());
+        let yang_type = YangType::Enumeration(HashMap::from([("up".to_string(), 1)]));
+        let err = cast_to_coreconf(&value, &yang_type, None).unwrap_err();
+        assert!(matches!(err, CoreconfError::TypeConversion(message) if message.contains("enumeration")));
     }
 }

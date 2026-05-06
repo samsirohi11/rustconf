@@ -5,7 +5,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::error::Result;
+use crate::error::{CoreconfError, Result};
 use crate::types::YangType;
 
 #[derive(Debug, Clone)]
@@ -57,19 +57,54 @@ impl SidFile {
         let mut types = HashMap::with_capacity(raw.item.len());
 
         for item in &raw.item {
-            sids.insert(item.identifier.clone(), item.sid);
-            ids.insert(item.sid, item.identifier.clone());
+            if let Some(existing_sid) = sids.get(&item.identifier) {
+                if existing_sid != &item.sid {
+                    return Err(CoreconfError::InvalidSidFile(format!(
+                        "identifier conflict for '{}': existing SID {existing_sid}, new SID {}",
+                        item.identifier, item.sid
+                    )));
+                }
+            } else {
+                sids.insert(item.identifier.clone(), item.sid);
+            }
+
+            if let Some(existing_identifier) = ids.get(&item.sid) {
+                if existing_identifier != &item.identifier {
+                    return Err(CoreconfError::InvalidSidFile(format!(
+                        "SID conflict for {}: existing identifier '{}', new identifier '{}'",
+                        item.sid, existing_identifier, item.identifier
+                    )));
+                }
+            } else {
+                ids.insert(item.sid, item.identifier.clone());
+            }
 
             if let Some(ref type_val) = item.item_type {
-                types.insert(item.identifier.clone(), YangType::from_sid_type(type_val));
+                let parsed_type = YangType::from_sid_type(type_val)?;
+                if let Some(existing_type) = types.get(&item.identifier) {
+                    if existing_type != &parsed_type {
+                        return Err(CoreconfError::InvalidSidFile(format!(
+                            "type conflict for '{}': existing {existing_type:?}, new {parsed_type:?}",
+                            item.identifier
+                        )));
+                    }
+                } else {
+                    types.insert(item.identifier.clone(), parsed_type);
+                }
             }
         }
 
         let key_mapping: HashMap<i64, Vec<i64>> = raw
             .key_mapping
             .into_iter()
-            .filter_map(|(k, v)| k.parse().ok().map(|sid| (sid, v)))
-            .collect();
+            .map(|(k, v)| {
+                k.parse().map(|sid| (sid, v)).map_err(|_| {
+                    CoreconfError::InvalidSidFile(format!(
+                        "key-mapping contains invalid list SID '{k}'"
+                    ))
+                })
+            })
+            .collect::<Result<_>>()?;
 
         Ok(SidFile {
             module_prefix: format!("/{}:", raw.module_name),
@@ -153,5 +188,99 @@ mod tests {
             sid_file.get_type("/example-1:greeting/author"),
             Some(&YangType::String)
         );
+    }
+
+    #[test]
+    fn test_parse_sid_file_rejects_invalid_key_mapping_keys() {
+        let err = SidFile::from_json_str(
+            r#"{
+                "module-name": "example-1",
+                "module-revision": "unknown",
+                "item": [{"identifier": "example-1", "sid": 60000}],
+                "key-mapping": {"invalid": [60001]}
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            crate::error::CoreconfError::InvalidSidFile(message)
+                if message.contains("key-mapping")
+        ));
+    }
+
+    #[test]
+    fn test_parse_sid_file_rejects_invalid_enum_metadata() {
+        let err = SidFile::from_json_str(
+            r#"{
+                "module-name": "example-1",
+                "module-revision": "unknown",
+                "item": [
+                    {"identifier": "example-1", "sid": 60000},
+                    {
+                        "identifier": "/example-1:state",
+                        "sid": 60001,
+                        "type": {"not-a-number": "up"}
+                    }
+                ],
+                "key-mapping": {}
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            crate::error::CoreconfError::InvalidSidFile(message)
+                if message.contains("enumeration")
+        ));
+    }
+
+    #[test]
+    fn test_parse_sid_file_rejects_duplicate_identifier_entries() {
+        let err = SidFile::from_json_str(
+            r#"{
+                "module-name": "example-1",
+                "module-revision": "unknown",
+                "item": [
+                    {"identifier": "example-1", "sid": 60000},
+                    {"identifier": "/example-1:state", "sid": 60001, "type": "string"},
+                    {"identifier": "/example-1:state", "sid": 60002, "type": "string"}
+                ],
+                "key-mapping": {}
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            crate::error::CoreconfError::InvalidSidFile(message)
+                if message.contains("identifier conflict")
+        ));
+    }
+
+    #[test]
+    fn test_parse_sid_file_rejects_unknown_union_member_types() {
+        let err = SidFile::from_json_str(
+            r#"{
+                "module-name": "example-1",
+                "module-revision": "unknown",
+                "item": [
+                    {"identifier": "example-1", "sid": 60000},
+                    {
+                        "identifier": "/example-1:state",
+                        "sid": 60001,
+                        "type": ["string", "bogus-type"]
+                    }
+                ],
+                "key-mapping": {}
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            crate::error::CoreconfError::InvalidSidFile(message)
+                if message.contains("unknown YANG type")
+        ));
     }
 }

@@ -1,4 +1,4 @@
-use coreconf_model::{CompositeModel, YangType};
+use coreconf_model::{CompositeModel, CoreconfError, YangType};
 
 #[test]
 fn composite_model_resolves_multiple_sid_files() {
@@ -38,4 +38,50 @@ fn composite_model_exposes_canonical_schema_fields() {
     assert_eq!(model.ids.get(&61002).map(String::as_str), Some("/example-b:list/id"));
     assert_eq!(model.types.get("/example-b:list/id"), Some(&YangType::Uint32));
     assert_eq!(model.key_mapping.get(&61001), Some(&vec![61002]));
+}
+
+#[test]
+fn composite_model_rejects_identifier_collisions_across_sid_files() {
+    let err = CompositeModel::from_sid_strings(&[
+        r#"{"module-name":"example-a","module-revision":"2026-01-01","item":[
+            {"identifier":"example-a","sid":60000},
+            {"identifier":"/example-a:root","sid":60001}
+        ],"key-mapping":{}}"#,
+        r#"{"module-name":"example-b","module-revision":"2026-01-01","item":[
+            {"identifier":"example-b","sid":61000},
+            {"identifier":"/example-a:root","sid":61001}
+        ],"key-mapping":{}}"#,
+    ])
+    .unwrap_err();
+
+    match err {
+        CoreconfError::InvalidSidFile(message) => {
+            assert!(message.contains("identifier conflict"));
+            assert!(message.contains("/example-a:root"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn composite_model_rejects_sid_collisions_across_sid_files() {
+    let err = CompositeModel::from_sid_strings(&[
+        r#"{"module-name":"example-a","module-revision":"2026-01-01","item":[
+            {"identifier":"example-a","sid":60000},
+            {"identifier":"/example-a:root","sid":60001}
+        ],"key-mapping":{}}"#,
+        r#"{"module-name":"example-b","module-revision":"2026-01-01","item":[
+            {"identifier":"example-b","sid":61000},
+            {"identifier":"/example-b:leaf","sid":60001}
+        ],"key-mapping":{}}"#,
+    ])
+    .unwrap_err();
+
+    match err {
+        CoreconfError::InvalidSidFile(message) => {
+            assert!(message.contains("SID conflict"));
+            assert!(message.contains("60001"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }

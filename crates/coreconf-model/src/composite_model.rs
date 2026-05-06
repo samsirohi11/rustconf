@@ -31,10 +31,53 @@ impl CompositeModel {
         let mut key_mapping = HashMap::new();
 
         for sid_file in &sid_files {
-            sids.extend(sid_file.sids.clone());
-            ids.extend(sid_file.ids.clone());
-            types.extend(sid_file.types.clone());
-            key_mapping.extend(sid_file.key_mapping.clone());
+            for (identifier, sid) in &sid_file.sids {
+                if let Some(existing_sid) = sids.get(identifier) {
+                    if existing_sid != sid {
+                        return Err(CoreconfError::InvalidSidFile(format!(
+                            "identifier conflict for '{identifier}': existing SID {existing_sid}, new SID {sid}"
+                        )));
+                    }
+                } else {
+                    sids.insert(identifier.clone(), *sid);
+                }
+            }
+
+            for (sid, identifier) in &sid_file.ids {
+                if let Some(existing_identifier) = ids.get(sid) {
+                    if existing_identifier != identifier {
+                        return Err(CoreconfError::InvalidSidFile(format!(
+                            "SID conflict for {sid}: existing identifier '{existing_identifier}', new identifier '{identifier}'"
+                        )));
+                    }
+                } else {
+                    ids.insert(*sid, identifier.clone());
+                }
+            }
+
+            for (identifier, yang_type) in &sid_file.types {
+                if let Some(existing_type) = types.get(identifier) {
+                    if existing_type != yang_type {
+                        return Err(CoreconfError::InvalidSidFile(format!(
+                            "type conflict for '{identifier}': existing {existing_type:?}, new {yang_type:?}"
+                        )));
+                    }
+                } else {
+                    types.insert(identifier.clone(), yang_type.clone());
+                }
+            }
+
+            for (sid, keys) in &sid_file.key_mapping {
+                if let Some(existing_keys) = key_mapping.get(sid) {
+                    if existing_keys != keys {
+                        return Err(CoreconfError::InvalidSidFile(format!(
+                            "key-mapping conflict for SID {sid}: existing {existing_keys:?}, new {keys:?}"
+                        )));
+                    }
+                } else {
+                    key_mapping.insert(*sid, keys.clone());
+                }
+            }
         }
 
         Ok(Self {
