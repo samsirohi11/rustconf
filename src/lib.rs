@@ -1,11 +1,6 @@
-//! rust-coreconf - Rust implementation of CORECONF (CoAP Management Interface)
-//!
-//! This is a facade crate that re-exports types from the workspace members.
-
 pub use coreconf_model::{
     CompositeModel,
     CoreconfError,
-    CoreconfModel, // Legacy type for backwards compatibility
     Instance,
     InstancePath,
     Result,
@@ -13,13 +8,22 @@ pub use coreconf_model::{
     YangType,
 };
 pub use coreconf_runtime::{
-    coap_types,
     Backend,
     Datastore,
     MemoryBackend,
     OperationBinding,
     PredicatePath,
-    RequestBuilder,
     RequestHandler,
+    coap_types,
 };
+
+pub use coreconf_model::CoreconfModel;
+pub use coreconf_runtime::RequestBuilder;
+
+pub mod instance_id {
+    pub use coreconf_model::instance_id::{
+        PathComponent, decode_instances, encode_identifiers, encode_instances,
+    };
+    pub use coreconf_model::{Instance, InstancePath};
+}
 

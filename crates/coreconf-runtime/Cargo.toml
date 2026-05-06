@@ -9,6 +9,5 @@ license = "GPL-3.0"
 
 [dependencies]
 coreconf-model = { path = "../coreconf-model" }
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "2.0"
+ciborium = "0.2"

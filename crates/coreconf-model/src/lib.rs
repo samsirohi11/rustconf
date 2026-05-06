@@ -1,72 +1,22 @@
-//! CORECONF model types and SID file handling
+//! CORECONF model types and SID file handling.
 
-use std::fmt;
-use std::str::FromStr;
+#[path = "../../../src/error.rs"]
+mod error;
+#[path = "../../../src/types.rs"]
+mod types;
+#[path = "../../../src/sid.rs"]
+mod sid;
+#[path = "../../../src/instance_id.rs"]
+pub mod instance_id;
+#[path = "../../../src/coreconf.rs"]
+mod coreconf;
 
-/// A composite model that can aggregate multiple SID files
+pub use coreconf::CoreconfModel;
+pub use error::{CoreconfError, Result};
+pub use instance_id::{Instance, InstancePath};
+pub use sid::SidFile;
+pub use types::YangType;
+
+/// Composite workspace model placeholder for the new boundary.
+#[derive(Debug, Clone, Default)]
 pub struct CompositeModel;
-
-/// Legacy CoreconfModel type (for backwards compatibility during migration)
-#[derive(Clone)]
-pub struct CoreconfModel;
-
-impl FromStr for CoreconfModel {
-    type Err = CoreconfError;
-
-    fn from_str(_s: &str) -> std::result::Result<Self, Self::Err> {
-        Ok(CoreconfModel)
-    }
-}
-
-impl CoreconfModel {
-    pub fn to_coreconf(&self, _json: &str) -> Result<Vec<u8>> {
-        Ok(vec![])
-    }
-
-    pub fn to_json(&self, _cbor: &[u8]) -> Result<String> {
-        Ok(String::new())
-    }
-}
-
-/// CORECONF error type
-#[derive(Debug)]
-pub struct CoreconfError;
-
-impl fmt::Display for CoreconfError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CoreconfError")
-    }
-}
-
-impl std::error::Error for CoreconfError {}
-
-/// Result type for CORECONF operations
-pub type Result<T> = std::result::Result<T, CoreconfError>;
-
-/// A YANG instance
-pub struct Instance;
-
-/// Path to a YANG instance
-pub struct InstancePath;
-
-/// SID file representation
-pub struct SidFile;
-
-/// YANG type enumeration
-pub enum YangType {
-    String,
-    Int8,
-    Int16,
-    Int32,
-    Int64,
-    Uint8,
-    Uint16,
-    Uint32,
-    Uint64,
-    Boolean,
-    Decimal64,
-    Empty,
-    Binary,
-    Identityref,
-    Union,
-}

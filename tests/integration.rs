@@ -4,7 +4,9 @@
 //! These self-contained tests ensure the library works standalone.
 
 use rust_coreconf::coap_types::{ContentFormat, Method, Request};
-use rust_coreconf::{CoreconfModel, Datastore, RequestBuilder, RequestHandler};
+use rust_coreconf::{
+    CompositeModel, CoreconfModel, Datastore, RequestBuilder, RequestHandler,
+};
 
 const SAMPLE_SID: &str = r#"{
     "assignment-range": [{"entry-point": 60000, "size": 10}],
@@ -96,8 +98,6 @@ fn test_handler_ipatch() {
 
 #[test]
 fn facade_reexports_new_workspace_types() {
-    use rust_coreconf::{CompositeModel, Datastore, RequestHandler};
-    
     let _ = std::any::type_name::<CompositeModel>();
     let _ = std::any::type_name::<Datastore>();
     let _ = std::any::type_name::<RequestHandler>();
