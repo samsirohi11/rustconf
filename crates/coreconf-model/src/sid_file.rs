@@ -259,6 +259,31 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_sid_file_accepts_unknown_top_level_type_strings() {
+        let sid_file = SidFile::from_json_str(
+            r#"{
+                "module-name": "example-1",
+                "module-revision": "unknown",
+                "item": [
+                    {"identifier": "example-1", "sid": 60000},
+                    {
+                        "identifier": "/example-1:address",
+                        "sid": 60001,
+                        "type": "inet:ipv4-address"
+                    }
+                ],
+                "key-mapping": {}
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            sid_file.get_type("/example-1:address"),
+            Some(&YangType::Unknown("inet:ipv4-address".to_string()))
+        );
+    }
+
+    #[test]
     fn test_parse_sid_file_rejects_unknown_union_member_types() {
         let err = SidFile::from_json_str(
             r#"{

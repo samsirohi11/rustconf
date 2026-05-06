@@ -35,7 +35,7 @@ pub enum YangType {
 impl YangType {
     pub fn from_sid_type(type_value: &Value) -> Result<Self> {
         match type_value {
-            Value::String(s) => Self::strict_from_string(s),
+            Value::String(s) => Ok(Self::from_string(s)),
             Value::Object(map) => {
                 let mut enum_map = HashMap::with_capacity(map.len());
                 for (raw_value, name) in map {
