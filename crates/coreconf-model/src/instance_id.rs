@@ -116,18 +116,18 @@ impl InstancePath {
                 path.push_delta(delta);
             }
             Value::Array(arr) => {
-                let mut expect_delta = true;
-                for item in arr {
-                    if expect_delta {
-                        if let Some(n) = item.as_i64() {
-                            path.push_delta(n);
-                        } else {
-                            return Err(CoreconfError::TypeConversion("expected SID delta".into()));
-                        }
-                    } else {
-                        path.push_key(item.clone());
+                let mut index = 0;
+                while index < arr.len() {
+                    let delta = arr[index].as_i64().ok_or_else(|| {
+                        CoreconfError::TypeConversion("expected SID delta".into())
+                    })?;
+                    path.push_delta(delta);
+                    index += 1;
+
+                    while index < arr.len() && arr[index].as_i64().is_none() {
+                        path.push_key(arr[index].clone());
+                        index += 1;
                     }
-                    expect_delta = !expect_delta;
                 }
             }
             _ => {
@@ -239,6 +239,28 @@ mod tests {
         path.push_key(Value::String("myserver".into()));
 
         assert!(path.to_cbor_value().is_array());
+    }
+
+    #[test]
+    fn test_instance_path_decodes_multi_key_segment() {
+        let decoded = InstancePath::from_cbor_value(&Value::Array(vec![
+            Value::Number(1756.into()),
+            Value::String("tenant-a".into()),
+            Value::String("interface-1".into()),
+            Value::Number(2.into()),
+        ]))
+        .unwrap();
+
+        assert_eq!(
+            decoded.components,
+            vec![
+                PathComponent::SidDelta(1756),
+                PathComponent::KeyValue(Value::String("tenant-a".into())),
+                PathComponent::KeyValue(Value::String("interface-1".into())),
+                PathComponent::SidDelta(2),
+            ]
+        );
+        assert_eq!(decoded.absolute_sid(), Some(1758));
     }
 
     #[test]
