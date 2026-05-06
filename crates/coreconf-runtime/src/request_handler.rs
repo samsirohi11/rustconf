@@ -250,23 +250,57 @@ impl RequestHandler {
             let value: Value = ciborium::from_reader(&mut cursor)
                 .map_err(|error| CoreconfError::CborDecode(error.to_string()))?;
 
-            match value {
-                Value::Number(number) => {
-                    if let Some(sid) = number.as_i64() {
-                        sids.push(sid);
-                    }
-                }
-                Value::Array(values) => {
-                    if let Some(sid) = values.first().and_then(Value::as_i64) {
-                        sids.push(sid);
-                    }
-                }
-                _ => {}
-            }
+            sids.push(parse_fetch_identifier(&value)?);
         }
 
         Ok(sids)
     }
+}
+
+fn parse_fetch_identifier(value: &Value) -> Result<i64> {
+    match value {
+        Value::Number(number) => number
+            .as_i64()
+            .ok_or_else(|| CoreconfError::TypeConversion("expected integer SID".into())),
+        Value::Array(values) => parse_fetch_identifier_array(values),
+        _ => Err(CoreconfError::TypeConversion(
+            "invalid FETCH identifier format".into(),
+        )),
+    }
+}
+
+fn parse_fetch_identifier_array(values: &[Value]) -> Result<i64> {
+    if values.is_empty() {
+        return Err(CoreconfError::TypeConversion(
+            "invalid FETCH identifier format".into(),
+        ));
+    }
+
+    let mut absolute_sid = 0i64;
+    let mut index = 0usize;
+
+    while index < values.len() {
+        let delta = values[index].as_i64().ok_or_else(|| {
+            CoreconfError::TypeConversion("expected SID delta in FETCH identifier".into())
+        })?;
+        absolute_sid += delta;
+        index += 1;
+
+        while index < values.len() && values[index].as_i64().is_none() {
+            if !is_supported_fetch_key_value(&values[index]) {
+                return Err(CoreconfError::TypeConversion(
+                    "unsupported key value in FETCH identifier".into(),
+                ));
+            }
+            index += 1;
+        }
+    }
+
+    Ok(absolute_sid)
+}
+
+fn is_supported_fetch_key_value(value: &Value) -> bool {
+    matches!(value, Value::Bool(_) | Value::Number(_) | Value::String(_))
 }
 
 fn encode_json_value(value: &Value) -> Result<Vec<u8>> {

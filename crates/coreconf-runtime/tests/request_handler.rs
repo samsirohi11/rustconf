@@ -98,3 +98,18 @@ fn request_handler_dispatches_post_using_canonical_predicate_path() {
         &[Some(json!({"reason": "test"}))]
     );
 }
+
+#[test]
+fn request_handler_rejects_malformed_fetch_payloads() {
+    let datastore = Datastore::new_in_memory(runtime_model());
+    let mut handler = RequestHandler::new(datastore);
+
+    let payload = encode_value(&json!([60004, {"unexpected": true}]));
+
+    let request = Request::new(Method::Fetch)
+        .with_payload(payload, ContentFormat::YangIdentifiersCbor);
+
+    let response = handler.handle(&request);
+
+    assert_eq!(response.code, ResponseCode::BadRequest);
+}

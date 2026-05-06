@@ -493,19 +493,55 @@ fn consume_key_values(
     }
 
     let mut values = Vec::with_capacity(expected_keys.len());
-    for ((expected_name, identifier_value), (actual_name, actual_value)) in
-        expected_keys.iter().zip(&predicates[start..end])
-    {
-        let identifier = identifier_value.as_str().unwrap_or_default();
-        if !predicate_name_matches(expected_name, identifier, actual_name) {
+    let predicate_slice = &predicates[start..end];
+
+    if expected_keys.len() == 1 {
+        for ((expected_name, identifier_value), (actual_name, actual_value)) in
+            expected_keys.iter().zip(predicate_slice)
+        {
+            let identifier = identifier_value.as_str().unwrap_or_default();
+            if !predicate_name_matches(expected_name, identifier, actual_name) {
+                return Err(CoreconfError::ValidationError(format!(
+                    "predicate '{actual_name}' does not match expected key '{expected_name}'"
+                )));
+            }
+            values.push((
+                expected_name.clone(),
+                coerce_predicate_value(model, identifier, actual_value)?,
+            ));
+        }
+    } else {
+        let mut matched = vec![false; predicate_slice.len()];
+
+        for (expected_name, identifier_value) in expected_keys {
+            let identifier = identifier_value.as_str().unwrap_or_default();
+            let Some((matched_index, (_, actual_value))) =
+                predicate_slice.iter().enumerate().find(|(index, (actual_name, _))| {
+                    !matched[*index]
+                        && predicate_name_matches(expected_name, identifier, actual_name)
+                })
+            else {
+                return Err(CoreconfError::ValidationError(format!(
+                    "missing predicate for expected key '{expected_name}'"
+                )));
+            };
+
+            matched[matched_index] = true;
+            values.push((
+                expected_name.clone(),
+                coerce_predicate_value(model, identifier, actual_value)?,
+            ));
+        }
+
+        if let Some((_, (actual_name, _))) = predicate_slice
+            .iter()
+            .enumerate()
+            .find(|(index, _)| !matched[*index])
+        {
             return Err(CoreconfError::ValidationError(format!(
-                "predicate '{actual_name}' does not match expected key '{expected_name}'"
+                "predicate '{actual_name}' does not match any expected key"
             )));
         }
-        values.push((
-            expected_name.clone(),
-            coerce_predicate_value(model, identifier, actual_value)?,
-        ));
     }
 
     *predicate_index = end;
