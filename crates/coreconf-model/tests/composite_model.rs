@@ -1,4 +1,4 @@
-use coreconf_model::CompositeModel;
+use coreconf_model::{CompositeModel, YangType};
 
 #[test]
 fn composite_model_resolves_multiple_sid_files() {
@@ -16,4 +16,26 @@ fn composite_model_resolves_multiple_sid_files() {
 
     assert_eq!(model.get_sid("/example-a:root"), Some(60001));
     assert_eq!(model.get_sid("/example-b:leaf"), Some(61001));
+}
+
+#[test]
+fn composite_model_exposes_canonical_schema_fields() {
+    let model = CompositeModel::from_sid_strings(&[
+        r#"{"module-name":"example-a","module-revision":"2026-01-01","item":[
+            {"identifier":"example-a","sid":60000},
+            {"identifier":"/example-a:root","sid":60001}
+        ],"key-mapping":{}}"#,
+        r#"{"module-name":"example-b","module-revision":"2026-01-01","item":[
+            {"identifier":"example-b","sid":61000},
+            {"identifier":"/example-b:list","sid":61001},
+            {"identifier":"/example-b:list/id","sid":61002,"type":"uint32"}
+        ],"key-mapping":{"61001":[61002]}}"#,
+    ])
+    .unwrap();
+
+    assert_eq!(model.sid_files.len(), 2);
+    assert_eq!(model.sids.get("/example-a:root"), Some(&60001));
+    assert_eq!(model.ids.get(&61002).map(String::as_str), Some("/example-b:list/id"));
+    assert_eq!(model.types.get("/example-b:list/id"), Some(&YangType::Uint32));
+    assert_eq!(model.key_mapping.get(&61001), Some(&vec![61002]));
 }

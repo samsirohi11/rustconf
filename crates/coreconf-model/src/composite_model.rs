@@ -8,11 +8,11 @@ use crate::types::{YangType, cast_from_coreconf, cast_to_coreconf};
 
 #[derive(Debug, Clone)]
 pub struct CompositeModel {
-    sid_files: Vec<SidFile>,
-    sids: HashMap<String, i64>,
-    ids: HashMap<i64, String>,
-    types: HashMap<String, YangType>,
-    key_mapping: HashMap<i64, Vec<i64>>,
+    pub sid_files: Vec<SidFile>,
+    pub sids: HashMap<String, i64>,
+    pub ids: HashMap<i64, String>,
+    pub types: HashMap<String, YangType>,
+    pub key_mapping: HashMap<i64, Vec<i64>>,
 }
 
 impl CompositeModel {
