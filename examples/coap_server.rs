@@ -240,7 +240,7 @@ fn run_server(
     println!("\n────────────────────────────────────────────────────────────────");
     println!("Saving datastore to {}...", output_path.display());
     let data = handler.datastore().get_all();
-    let json = serde_json::to_string_pretty(data).expect("Failed to serialize datastore");
+    let json = serde_json::to_string_pretty(&data).expect("Failed to serialize datastore");
     std::fs::write(&output_path, &json).expect("Failed to write output file");
     println!("✓ Saved {} bytes", json.len());
     println!("────────────────────────────────────────────────────────────────");

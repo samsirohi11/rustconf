@@ -3,11 +3,14 @@ name = "coreconf-runtime"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-authors = ["Sam"]
-description = "CORECONF runtime and request handling"
-license = "GPL-3.0"
 
 [dependencies]
 coreconf-model = { path = "../coreconf-model" }
 serde_json = "1.0"
+thiserror = "2.0"
 ciborium = "0.2"
+coap-lite = "0.13"
+
+[dev-dependencies]
+hex = "0.4"
+tempfile = "3.14"
