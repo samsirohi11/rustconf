@@ -18,7 +18,6 @@ pub use coreconf_runtime::{
 };
 
 pub use coreconf_model::CoreconfModel;
-pub use coreconf_runtime::RequestBuilder;
 
 pub mod instance_id {
     pub use coreconf_model::instance_id::{

@@ -5,8 +5,9 @@
 
 use rust_coreconf::coap_types::{ContentFormat, Method, Request};
 use rust_coreconf::{
-    CompositeModel, CoreconfModel, Datastore, RequestBuilder, RequestHandler,
+    CompositeModel, CoreconfModel, Datastore, Instance, InstancePath, RequestHandler,
 };
+use rust_coreconf::instance_id::{encode_identifiers, encode_instances};
 
 const SAMPLE_SID: &str = r#"{
     "assignment-range": [{"entry-point": 60000, "size": 10}],
@@ -22,6 +23,33 @@ const SAMPLE_SID: &str = r#"{
 }"#;
 
 const SAMPLE_JSON: &str = r#"{"example-1:greeting": {"author": "Obi", "message": "Hello there!"}}"#;
+
+fn encode_fetch_sids(sids: &[i64]) -> Vec<u8> {
+    let paths: Vec<_> = sids
+        .iter()
+        .map(|sid| {
+            let mut path = InstancePath::new();
+            path.push_delta(*sid);
+            path
+        })
+        .collect();
+    encode_identifiers(&paths).unwrap()
+}
+
+fn encode_ipatch_sids(changes: &[(i64, Option<serde_json::Value>)]) -> Vec<u8> {
+    let instances: Vec<_> = changes
+        .iter()
+        .map(|(sid, value)| {
+            let mut path = InstancePath::new();
+            path.push_delta(*sid);
+            match value {
+                Some(value) => Instance::new(path, value.clone()),
+                None => Instance::delete(path),
+            }
+        })
+        .collect();
+    encode_instances(&instances).unwrap()
+}
 
 #[test]
 fn test_coreconf_roundtrip() {
@@ -60,10 +88,9 @@ fn test_handler_fetch() {
     let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
     let datastore = Datastore::from_json(model.clone(), SAMPLE_JSON).unwrap();
     let mut handler = RequestHandler::new(datastore);
-    let builder = RequestBuilder::new(model);
 
     // Build FETCH request for author field (SID 60002)
-    let payload = builder.build_fetch_sids(&[60002]).unwrap();
+    let payload = encode_fetch_sids(&[60002]);
     let request =
         Request::new(Method::Fetch).with_payload(payload, ContentFormat::YangIdentifiersCbor);
 
@@ -78,12 +105,9 @@ fn test_handler_ipatch() {
     let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
     let datastore = Datastore::from_json(model.clone(), SAMPLE_JSON).unwrap();
     let mut handler = RequestHandler::new(datastore);
-    let builder = RequestBuilder::new(model);
 
     // Modify author
-    let payload = builder
-        .build_ipatch_sids(&[(60002, Some(serde_json::json!("General Kenobi")))])
-        .unwrap();
+    let payload = encode_ipatch_sids(&[(60002, Some(serde_json::json!("General Kenobi")))]);
 
     let request =
         Request::new(Method::IPatch).with_payload(payload, ContentFormat::YangInstancesCborSeq);

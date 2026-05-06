@@ -7,12 +7,9 @@ pub mod path;
 pub mod request_handler;
 pub mod transport {}
 
-mod request_builder;
-
 pub use backend::Backend;
 pub use datastore::Datastore;
 pub use memory_backend::MemoryBackend;
 pub use operations::{OperationBinding, OperationRegistry};
 pub use path::PredicatePath;
-pub use request_builder::RequestBuilder;
 pub use request_handler::RequestHandler;

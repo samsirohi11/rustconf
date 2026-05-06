@@ -5,7 +5,8 @@
 //! This example shows what's happening at each step of CORECONF operations.
 
 use rust_coreconf::coap_types::{ContentFormat, Method, Request};
-use rust_coreconf::{CoreconfModel, Datastore, RequestBuilder, RequestHandler};
+use rust_coreconf::instance_id::{encode_identifiers, encode_instances};
+use rust_coreconf::{CoreconfModel, Datastore, Instance, InstancePath, RequestHandler};
 use serde_json::json;
 
 const SAMPLE_SID: &str = r#"{
@@ -28,6 +29,33 @@ const INITIAL_DATA: &str = r#"{
     }
 }"#;
 
+fn encode_fetch_sids(sids: &[i64]) -> Vec<u8> {
+    let paths: Vec<_> = sids
+        .iter()
+        .map(|sid| {
+            let mut path = InstancePath::new();
+            path.push_delta(*sid);
+            path
+        })
+        .collect();
+    encode_identifiers(&paths).unwrap()
+}
+
+fn encode_ipatch_sids(changes: &[(i64, Option<serde_json::Value>)]) -> Vec<u8> {
+    let instances: Vec<_> = changes
+        .iter()
+        .map(|(sid, value)| {
+            let mut path = InstancePath::new();
+            path.push_delta(*sid);
+            match value {
+                Some(value) => Instance::new(path, value.clone()),
+                None => Instance::delete(path),
+            }
+        })
+        .collect();
+    encode_instances(&instances).unwrap()
+}
+
 fn main() {
     println!("╔══════════════════════════════════════════════════════════════════════╗");
     println!("║                    CORECONF Protocol Explained                       ║");
@@ -49,7 +77,6 @@ fn main() {
     let model: CoreconfModel = SAMPLE_SID.parse().unwrap();
     let datastore = Datastore::from_json(model.clone(), INITIAL_DATA).unwrap();
     let mut handler = RequestHandler::new(datastore);
-    let builder = RequestBuilder::new(model.clone());
 
     println!("Initial Data (JSON):");
     println!("  {}", INITIAL_DATA.trim());
@@ -86,7 +113,7 @@ fn main() {
     println!("│ We'll fetch SID 60002 (author field)                                  │");
     println!("└───────────────────────────────────────────────────────────────────────┘\n");
 
-    let fetch_payload = builder.build_fetch_sids(&[60002]).unwrap();
+    let fetch_payload = encode_fetch_sids(&[60002]);
     println!(
         "Request Payload (CBOR): {} = SID 60002",
         hex::encode(&fetch_payload)
@@ -117,9 +144,7 @@ fn main() {
     println!("│ We'll change author from 'Obi-Wan' to 'General Kenobi'                │");
     println!("└───────────────────────────────────────────────────────────────────────┘\n");
 
-    let patch_payload = builder
-        .build_ipatch_sids(&[(60002, Some(json!("General Kenobi")))])
-        .unwrap();
+    let patch_payload = encode_ipatch_sids(&[(60002, Some(json!("General Kenobi")))]);
 
     println!("Request Payload (CBOR): {}", hex::encode(&patch_payload));
     println!("  Meaning: {{60002: \"General Kenobi\"}}");
@@ -155,11 +180,9 @@ fn main() {
     println!("│ Payload: {{60002: null}}                                                 │");
     println!("└────────────────────────────────────────────────────────────────────────┘\n");
 
-    let delete_payload = builder
-        .build_ipatch_sids(&[
-            (60002, None), // None = delete
-        ])
-        .unwrap();
+    let delete_payload = encode_ipatch_sids(&[
+        (60002, None), // None = delete
+    ]);
 
     println!("Request Payload (CBOR): {}", hex::encode(&delete_payload));
 

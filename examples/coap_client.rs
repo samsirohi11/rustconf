@@ -19,7 +19,8 @@ use coap_lite::{
     ContentFormat as CoapContentFormat, MessageClass, MessageType, Packet, RequestType,
 };
 use rust_coreconf::coap_types::ContentFormat;
-use rust_coreconf::{CoreconfModel, RequestBuilder};
+use rust_coreconf::instance_id::{encode_identifiers, encode_instances};
+use rust_coreconf::{CoreconfModel, Instance, InstancePath};
 use std::io::{self, Write};
 use std::net::UdpSocket;
 use std::time::Duration;
@@ -43,7 +44,6 @@ struct Args {
 
 struct Client {
     model: CoreconfModel,
-    builder: RequestBuilder,
     socket: UdpSocket,
     path: String,
     message_id: u16,
@@ -56,7 +56,6 @@ impl Client {
         socket.connect(server)?;
 
         Ok(Self {
-            builder: RequestBuilder::new(model.clone()),
             model,
             socket,
             path: path.to_string(),
@@ -141,7 +140,7 @@ impl Client {
             }
         }
 
-        match self.builder.build_fetch_sids(&sids) {
+        match encode_fetch_sids(&sids) {
             Ok(payload) => {
                 match self.send_request(
                     RequestType::Fetch,
@@ -166,7 +165,7 @@ impl Client {
         }
 
         let changes: Vec<_> = changes.into_iter().map(|(sid, v)| (sid, Some(v))).collect();
-        match self.builder.build_ipatch_sids(&changes) {
+        match encode_ipatch_sids(&changes) {
             Ok(payload) => {
                 match self.send_request(
                     RequestType::IPatch,
@@ -190,7 +189,7 @@ impl Client {
         }
 
         let changes: Vec<_> = sids.into_iter().map(|sid| (sid, None)).collect();
-        match self.builder.build_ipatch_sids(&changes) {
+        match encode_ipatch_sids(&changes) {
             Ok(payload) => {
                 match self.send_request(
                     RequestType::IPatch,
@@ -260,6 +259,33 @@ impl Client {
             Err(_) => self.decode_and_print(payload),
         }
     }
+}
+
+fn encode_fetch_sids(sids: &[i64]) -> rust_coreconf::Result<Vec<u8>> {
+    let paths: Vec<_> = sids
+        .iter()
+        .map(|sid| {
+            let mut path = InstancePath::new();
+            path.push_delta(*sid);
+            path
+        })
+        .collect();
+    encode_identifiers(&paths)
+}
+
+fn encode_ipatch_sids(changes: &[(i64, Option<serde_json::Value>)]) -> rust_coreconf::Result<Vec<u8>> {
+    let instances: Vec<_> = changes
+        .iter()
+        .map(|(sid, value)| {
+            let mut path = InstancePath::new();
+            path.push_delta(*sid);
+            match value {
+                Some(value) => Instance::new(path, value.clone()),
+                None => Instance::delete(path),
+            }
+        })
+        .collect();
+    encode_instances(&instances)
 }
 
 fn print_help() {

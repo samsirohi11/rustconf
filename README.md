@@ -32,21 +32,22 @@ let request = Request::new(Method::Get);
 let response = handler.handle(&request);
 ```
 
-Build FETCH and iPATCH requests from the client side:
+Build FETCH and iPATCH requests from the client side with RFC 9595 instance-identifier helpers:
 
 ```rust
-use rust_coreconf::{RequestBuilder, SidFile};
+use rust_coreconf::instance_id::{encode_identifiers, encode_instances};
+use rust_coreconf::{Instance, InstancePath};
 
-let sid_file = SidFile::from_file("ietf-schc@2026-01-12.sid")?;
+let mut fetch_path = InstancePath::new();
+fetch_path.push_delta(2501);
+let fetch_payload = encode_identifiers(&[fetch_path])?;
 
-// FETCH specific SIDs
-let fetch_payload = RequestBuilder::build_fetch(&[2501, 2502, 2503])?;
-
-// iPATCH to set values
-let ipatch_payload = RequestBuilder::build_ipatch(
-    &[(2501, serde_json::json!(42))],
-    &sid_file,
-)?;
+let mut patch_path = InstancePath::new();
+patch_path.push_delta(2501);
+let ipatch_payload = encode_instances(&[Instance::new(
+    patch_path,
+    serde_json::json!(42),
+)])?;
 ```
 
 ## What is CORECONF?
@@ -66,7 +67,6 @@ This makes CORECONF ideal for resource-constrained devices where bandwidth and p
 - **JSON to CBOR Conversion** -- transform JSON configuration into compact CBOR with automatic SID delta encoding
 - **CBOR to JSON Conversion** -- decode CBOR responses back to JSON for display and debugging
 - **Request Handler** -- process incoming CORECONF requests (GET, FETCH, iPATCH, POST)
-- **Request Builder** -- construct CORECONF request payloads for client applications
 - **Instance Identifiers** -- YANG instance-identifier encoding per RFC 9595
 
 ## CORECONF Operations
@@ -87,7 +87,6 @@ src/
   sid.rs             # SidFile: YANG path <-> SID mapping
   datastore.rs       # Datastore: hierarchical YANG data instances
   handler.rs         # RequestHandler: server-side CORECONF protocol
-  request_builder.rs # RequestBuilder: client-side CBOR payload construction
   instance_id.rs     # YANG instance-identifier encoding/decoding
   coap_types.rs      # Library-agnostic CoAP request/response types
   types.rs           # YANG node types (containers, lists, leaves)
@@ -102,7 +101,6 @@ src/
 | `SidFile`            | Parses `.sid` files, provides bidirectional path/SID lookups             |
 | `Datastore`          | Manages YANG data instances with get/set/delete by path or SID           |
 | `RequestHandler`     | Server-side: processes CoAP requests, manipulates datastore              |
-| `RequestBuilder`     | Client-side: constructs FETCH and iPATCH CBOR payloads                   |
 | `InstancePath`       | Delta-encoded YANG instance-identifiers (RFC 9595)                       |
 
 ## SID Files
