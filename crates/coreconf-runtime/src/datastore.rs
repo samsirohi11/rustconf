@@ -324,17 +324,26 @@ impl Datastore {
 
         let mut key_values = Vec::new();
         if !parsed.predicates.is_empty() {
-            let list_keys = list_keys(&self.model, &parsed.canonical_path)?;
+            // Walk through the canonical path segments to find list ancestors
+            // and consume predicates at the correct list node.
+            let segments = split_canonical_segments(&parsed.canonical_path);
+            let mut current_path = String::new();
             let mut predicate_index = 0usize;
-            key_values = consume_key_values(
-                &self.model,
-                &list_keys,
-                &parsed.predicates,
-                &mut predicate_index,
-            )?
-            .into_iter()
-            .map(|(_, v)| v)
-            .collect();
+
+            for segment in segments.iter() {
+                current_path = join_path(&current_path, segment);
+                let list_entry_keys = list_keys(&self.model, &current_path)?;
+                if !list_entry_keys.is_empty() {
+                    let consumed = consume_key_values(
+                        &self.model,
+                        &list_entry_keys,
+                        &parsed.predicates,
+                        &mut predicate_index,
+                    )?;
+                    key_values.extend(consumed.into_iter().map(|(_, v)| v));
+                }
+            }
+
             if predicate_index != parsed.predicates.len() {
                 return Err(CoreconfError::ValidationError(format!(
                     "unused predicates in path '{path}'"
@@ -466,6 +475,22 @@ fn get_at_path(
             None => Ok(None),
         }
     } else {
+        let end = *predicate_index + list_keys.len();
+        let has_predicates = end <= predicates.len();
+        let is_last = depth == segments.len() - 1;
+
+        if !has_predicates && !is_last {
+            return Err(CoreconfError::ValidationError(format!(
+                "predicates required for keyed list node '{segment}' in path '{current_path}/{segment}'"
+            )));
+        }
+
+        if !has_predicates && is_last {
+            // Last segment is a list node with no predicates — return current
+            // value as-is (used by predicates() to read the entire list).
+            return Ok(Some(current.clone()));
+        }
+
         let key_values = consume_key_values(model, &list_keys, predicates, predicate_index)?;
         let map = match current.as_object() {
             Some(map) => map,
@@ -529,6 +554,24 @@ fn set_at_path(
             value,
         )
     } else {
+        let end = *predicate_index + list_keys.len();
+        let has_predicates = end <= predicates.len();
+        let is_last = depth == segments.len() - 1;
+
+        if !has_predicates && !is_last {
+            return Err(CoreconfError::ValidationError(format!(
+                "predicates required for keyed list node '{segment}' in path '{current_path}/{segment}'"
+            )));
+        }
+
+        if !has_predicates && is_last {
+            // Last segment is a list node with no predicates — replace the
+            // entire list value (used when setting a full list array).
+            let map = ensure_object(current)?;
+            map.insert(storage_key(segment, depth), value);
+            return Ok(());
+        }
+
         let key_values = consume_key_values(model, &list_keys, predicates, predicate_index)?;
         let map = ensure_object(current)?;
         let list = map
