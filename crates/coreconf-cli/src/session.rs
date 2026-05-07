@@ -124,8 +124,12 @@ impl FileSession {
     }
 
     pub fn encoded_working_copy(&self) -> Result<Vec<u8>, CliError> {
-        encode_editable_value(&self.model, &self.backend.read_tree(), self.backend.format())
-            .map_err(CliError::Model)
+        encode_editable_value(
+            &self.model,
+            &self.backend.read_tree(),
+            self.backend.format(),
+        )
+        .map_err(CliError::Model)
     }
 
     fn validate_save(&self, _force: bool) -> Result<(), CliError> {
@@ -179,7 +183,9 @@ impl Session {
 
     /// Set a value at the given predicate path.
     pub fn set(&mut self, path: &str, value: Value) -> Result<(), CliError> {
-        self.datastore.set_path(path, value).map_err(CliError::Model)
+        self.datastore
+            .set_path(path, value)
+            .map_err(CliError::Model)
     }
 
     /// Delete the value at the given predicate path.

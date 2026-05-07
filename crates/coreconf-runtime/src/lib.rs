@@ -10,9 +10,7 @@ pub mod transport;
 
 pub use backend::Backend;
 pub use datastore::Datastore;
-pub use file_backend::{
-    EditableFormat, FileBackend, encode_editable_value, read_editable_file,
-};
+pub use file_backend::{EditableFormat, FileBackend, encode_editable_value, read_editable_file};
 pub use memory_backend::MemoryBackend;
 pub use operations::{OperationBinding, OperationRegistry};
 pub use path::PredicatePath;

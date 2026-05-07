@@ -2,8 +2,8 @@ use clap::Args;
 use coreconf_runtime::transport::coap_lite::CoapLiteClient;
 use std::io::{self, BufRead, Write};
 
-use crate::session::LiveSession;
 use crate::CliError;
+use crate::session::LiveSession;
 
 /// Start an interactive live CORECONF session against a remote CoAP server.
 #[derive(Args)]
@@ -24,8 +24,8 @@ pub struct LiveArgs {
 pub fn run(args: LiveArgs) -> Result<(), CliError> {
     let model = crate::load_model(&args.sid)?;
 
-    let client =
-        CoapLiteClient::connect(model.clone(), &args.server, &args.path).map_err(CliError::Model)?;
+    let client = CoapLiteClient::connect(model.clone(), &args.server, &args.path)
+        .map_err(CliError::Model)?;
 
     eprintln!("Connected to coap://{}/{}", args.server, args.path);
 

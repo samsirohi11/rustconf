@@ -3,8 +3,8 @@ use coreconf_runtime::EditableFormat;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
-use crate::session::{FileSession, SaveOptions, Session, StagedChange};
 use crate::CliError;
+use crate::session::{FileSession, SaveOptions, Session, StagedChange};
 
 /// Start an interactive CORECONF shell with a local file-backed datastore.
 #[derive(Args)]

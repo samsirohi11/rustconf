@@ -2,8 +2,8 @@ use std::net::{ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
 use coap_lite::{
-    CoapOption, ContentFormat as CoapContentFormat, MessageClass, MessageType, Packet,
-    RequestType, ResponseType,
+    CoapOption, ContentFormat as CoapContentFormat, MessageClass, MessageType, Packet, RequestType,
+    ResponseType,
 };
 use coreconf_model::{CompositeModel, CoreconfError, Result};
 use serde_json::Value;
