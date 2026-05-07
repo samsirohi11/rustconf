@@ -557,12 +557,44 @@ fn coerce_predicate_value(model: &CompositeModel, identifier: &str, raw: &str) -
                 "cannot parse '{raw}' as boolean"
             ))),
         },
+        Some(YangType::Identityref) => {
+            // Accept the identity name (e.g. "coreconf-m2m:solar-radiation") or raw SID.
+            if let Ok(sid) = raw.parse::<i64>() {
+                return Ok(Value::Number(sid.into()));
+            }
+            // Try exact match, then with leading /, then unambiguous unqualified name.
+            let sid = model
+                .get_sid(raw)
+                .or_else(|| model.get_sid(&format!("/{raw}")))
+                .or_else(|| resolve_unqualified_identity(model, raw))
+                .ok_or_else(|| {
+                    CoreconfError::TypeConversion(format!(
+                        "identityref predicate value not found: '{raw}'"
+                    ))
+                })?;
+            Ok(Value::Number(sid.into()))
+        }
+        Some(YangType::Enumeration(enum_map)) => {
+            // Accept the enum name (e.g. "delta") or raw integer.
+            if let Ok(int_val) = raw.parse::<i64>() {
+                return Ok(Value::Number(int_val.into()));
+            }
+            // Reverse lookup: find the integer value whose name matches.
+            let (_, int_val) = enum_map
+                .iter()
+                .find(|(name, _)| name.as_str() == raw)
+                .ok_or_else(|| {
+                    CoreconfError::TypeConversion(format!(
+                        "enum predicate value not found: '{raw}'"
+                    ))
+                })?;
+            Ok(Value::Number((*int_val).into()))
+        }
         Some(
             YangType::Int8
             | YangType::Int16
             | YangType::Int32
-            | YangType::Int64
-            | YangType::Enumeration(_),
+            | YangType::Int64,
         ) => raw
             .parse::<i64>()
             .map(|value| Value::Number(value.into()))
@@ -585,6 +617,22 @@ fn coerce_predicate_value(model: &CompositeModel, identifier: &str, raw: &str) -
         }
         _ => Ok(Value::String(raw.to_string())),
     }
+}
+
+/// Resolve an unqualified identity name (e.g. "solar-radiation") when unique across modules.
+fn resolve_unqualified_identity(model: &CompositeModel, short_name: &str) -> Option<i64> {
+    let mut matches = Vec::new();
+    for (identifier, sid) in &model.sids {
+        // Only consider top-level qualified names (module_name:identity).
+        if identifier.contains('/') || !identifier.contains(':') {
+            continue;
+        }
+        let candidate_short = identifier.split(':').next_back().unwrap_or(identifier);
+        if candidate_short == short_name {
+            matches.push(*sid);
+        }
+    }
+    (matches.len() == 1).then_some(matches[0])
 }
 
 fn predicate_name_matches(expected_leaf: &str, identifier: &str, actual_name: &str) -> bool {
