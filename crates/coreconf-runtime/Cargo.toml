@@ -9,7 +9,8 @@ coreconf-model = { path = "../coreconf-model" }
 serde_json = "1.0"
 thiserror = "2.0"
 ciborium = "0.2"
+coap-lite = "0.13"
+tempfile = "3.14"
 
 [dev-dependencies]
 hex = "0.4"
-tempfile = "3.14"

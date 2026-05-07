@@ -1,2 +1,1 @@
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct TransportShell;
+pub mod coap_lite;

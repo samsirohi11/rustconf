@@ -12,8 +12,8 @@ use coap_lite::{
 use rust_coreconf::coap_types::{ContentFormat, Method, Request};
 use rust_coreconf::{CoreconfModel, Datastore, RequestHandler};
 use std::net::UdpSocket;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[command(name = "coreconf-server")]
