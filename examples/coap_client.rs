@@ -94,14 +94,14 @@ impl Client {
 
         let bytes = packet
             .to_bytes()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         self.socket.send(&bytes)?;
 
         let mut buf = [0u8; 1500];
         match self.socket.recv(&mut buf) {
             Ok(len) => {
-                let response = Packet::from_bytes(&buf[..len])
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                let response =
+                    Packet::from_bytes(&buf[..len]).map_err(|e| io::Error::other(e.to_string()))?;
 
                 let code_str = format!("{:?}", response.header.code);
                 println!("  Response: {}", code_str);
@@ -273,7 +273,9 @@ fn encode_fetch_sids(sids: &[i64]) -> rust_coreconf::Result<Vec<u8>> {
     encode_identifiers(&paths)
 }
 
-fn encode_ipatch_sids(changes: &[(i64, Option<serde_json::Value>)]) -> rust_coreconf::Result<Vec<u8>> {
+fn encode_ipatch_sids(
+    changes: &[(i64, Option<serde_json::Value>)],
+) -> rust_coreconf::Result<Vec<u8>> {
     let instances: Vec<_> = changes
         .iter()
         .map(|(sid, value)| {

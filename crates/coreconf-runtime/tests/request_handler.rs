@@ -106,8 +106,8 @@ fn request_handler_rejects_malformed_fetch_payloads() {
 
     let payload = encode_value(&json!([60004, {"unexpected": true}]));
 
-    let request = Request::new(Method::Fetch)
-        .with_payload(payload, ContentFormat::YangIdentifiersCbor);
+    let request =
+        Request::new(Method::Fetch).with_payload(payload, ContentFormat::YangIdentifiersCbor);
 
     let response = handler.handle(&request);
 

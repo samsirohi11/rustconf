@@ -174,65 +174,62 @@ fn run_server(
             Err(e) => return Err(e),
         };
 
-        match Packet::from_bytes(&buf[..len]) {
-            Ok(packet) => {
-                // Skip empty ACK packets (follow-up confirmations)
-                if matches!(packet.header.code, MessageClass::Empty) {
-                    continue;
-                }
+        if let Ok(packet) = Packet::from_bytes(&buf[..len]) {
+            // Skip empty ACK packets (follow-up confirmations)
+            if matches!(packet.header.code, MessageClass::Empty) {
+                continue;
+            }
 
-                let request = CoapRequest::from_packet(packet, src);
-                let path = request.get_path();
+            let request = CoapRequest::from_packet(packet, src);
+            let path = request.get_path();
 
-                // Skip requests not matching our path
-                if path != res_path {
-                    let response = create_not_found(&request.message);
-                    let bytes = response.to_bytes().unwrap_or_default();
-                    socket.send_to(&bytes, src)?;
-                    if verbose {
-                        println!(
-                            "[{}] {} /{} → 4.04 Not Found",
-                            src,
-                            format_method(&request.message.header.code),
-                            path
-                        );
-                    }
-                    continue;
-                }
-
+            // Skip requests not matching our path
+            if path != res_path {
+                let response = create_not_found(&request.message);
+                let bytes = response.to_bytes().unwrap_or_default();
+                socket.send_to(&bytes, src)?;
                 if verbose {
                     println!(
-                        "[{}] {} /{} ({} bytes)",
+                        "[{}] {} /{} → 4.04 Not Found",
                         src,
                         format_method(&request.message.header.code),
-                        path,
-                        request.message.payload.len()
+                        path
                     );
-                    if !request.message.payload.is_empty() {
-                        println!("  ← CBOR: {}", hex::encode(&request.message.payload));
-                    }
                 }
+                continue;
+            }
 
-                let response_packet = handle_coap_request(&mut handler, &request, verbose, &model);
-                let response_bytes = response_packet.to_bytes().unwrap_or_default();
-                socket.send_to(&response_bytes, src)?;
-
-                if verbose {
-                    if !response_packet.payload.is_empty() {
-                        println!("  → CBOR: {}", hex::encode(&response_packet.payload));
-                    }
-                    println!(
-                        "  → {} ({} bytes)\n",
-                        format_response(&response_packet.header.code),
-                        response_packet.payload.len()
-                    );
-                } else {
-                    print!(".");
-                    use std::io::Write;
-                    std::io::stdout().flush().ok();
+            if verbose {
+                println!(
+                    "[{}] {} /{} ({} bytes)",
+                    src,
+                    format_method(&request.message.header.code),
+                    path,
+                    request.message.payload.len()
+                );
+                if !request.message.payload.is_empty() {
+                    println!("  ← CBOR: {}", hex::encode(&request.message.payload));
                 }
             }
-            Err(_) => {}
+
+            let response_packet = handle_coap_request(&mut handler, &request, verbose, &model);
+            let response_bytes = response_packet.to_bytes().unwrap_or_default();
+            socket.send_to(&response_bytes, src)?;
+
+            if verbose {
+                if !response_packet.payload.is_empty() {
+                    println!("  → CBOR: {}", hex::encode(&response_packet.payload));
+                }
+                println!(
+                    "  → {} ({} bytes)\n",
+                    format_response(&response_packet.header.code),
+                    response_packet.payload.len()
+                );
+            } else {
+                print!(".");
+                use std::io::Write;
+                std::io::stdout().flush().ok();
+            }
         }
     }
 

@@ -154,20 +154,11 @@ fn parses_real_m2m_sid_file() {
     let model = CompositeModel::from_sid_files(vec![sid_file]).unwrap();
 
     // Verify identities are stored as module_name:identity_name
-    assert_eq!(
-        model.get_sid("coreconf-m2m:solar-radiation"),
-        Some(100008)
-    );
-    assert_eq!(
-        model.get_sid("coreconf-m2m:air-temperature"),
-        Some(100001)
-    );
+    assert_eq!(model.get_sid("coreconf-m2m:solar-radiation"), Some(100008));
+    assert_eq!(model.get_sid("coreconf-m2m:air-temperature"), Some(100001));
 
     // Verify data nodes keep full paths
-    assert_eq!(
-        model.get_sid("/coreconf-m2m:transducers"),
-        Some(100062)
-    );
+    assert_eq!(model.get_sid("/coreconf-m2m:transducers"), Some(100062));
     assert_eq!(
         model.get_sid("/coreconf-m2m:transducers/transducer"),
         Some(100063)
@@ -188,9 +179,8 @@ fn parses_real_m2m_sid_file() {
     );
 
     // Verify enums
-    let encoding_type = model.get_type(
-        "/coreconf-m2m:transducers/transducer/notification-parameters/history/encoding",
-    );
+    let encoding_type = model
+        .get_type("/coreconf-m2m:transducers/transducer/notification-parameters/history/encoding");
     assert!(encoding_type.is_some());
 
     // Verify key mapping: transducer list has keys [type, id]

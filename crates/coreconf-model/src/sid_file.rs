@@ -58,7 +58,10 @@ fn extract_items(sid_data: &serde_json::Map<String, Value>) -> Result<Vec<Parsed
                     .cloned()
                     .ok_or_else(|| CoreconfError::InvalidSidFile("item missing 'sid'".into()))?,
                 item_type: obj.get("type").cloned(),
-                namespace: obj.get("namespace").and_then(Value::as_str).map(str::to_string),
+                namespace: obj
+                    .get("namespace")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             })
         })
         .collect()
@@ -180,10 +183,7 @@ impl SidFile {
                     "key-mapping contains invalid list SID '{key}'"
                 ))
             })?;
-            let key_sids: Vec<i64> = values
-                .iter()
-                .map(parse_sid_value)
-                .collect::<Result<_>>()?;
+            let key_sids: Vec<i64> = values.iter().map(parse_sid_value).collect::<Result<_>>()?;
             key_mapping.insert(list_sid, key_sids);
         }
 
@@ -431,10 +431,7 @@ mod tests {
 
         assert_eq!(sid_file.get_sid("test-mod"), Some(60000));
         assert_eq!(sid_file.get_sid("/test-mod:data"), Some(60001));
-        assert_eq!(
-            sid_file.get_type("/test-mod:data"),
-            Some(&YangType::String)
-        );
+        assert_eq!(sid_file.get_type("/test-mod:data"), Some(&YangType::String));
     }
 
     #[test]
@@ -473,17 +470,14 @@ mod tests {
         .unwrap();
 
         // Identity items stored as module_name:identity_name
-        assert_eq!(
-            sid_file.get_sid("my-module:solar-radiation"),
-            Some(60001)
-        );
-        assert_eq!(
-            sid_file.get_sid("my-module:air-temperature"),
-            Some(60002)
-        );
+        assert_eq!(sid_file.get_sid("my-module:solar-radiation"), Some(60001));
+        assert_eq!(sid_file.get_sid("my-module:air-temperature"), Some(60002));
         // Data items keep their full path
         assert_eq!(sid_file.get_sid("/my-module:reading"), Some(60003));
-        assert_eq!(sid_file.get_identifier(60001), Some("my-module:solar-radiation"));
+        assert_eq!(
+            sid_file.get_identifier(60001),
+            Some("my-module:solar-radiation")
+        );
     }
 
     #[test]
@@ -524,9 +518,6 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            sid_file.get_keys(60001),
-            Some(&vec![60002, 60003])
-        );
+        assert_eq!(sid_file.get_keys(60001), Some(&vec![60002, 60003]));
     }
 }

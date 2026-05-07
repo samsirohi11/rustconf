@@ -109,16 +109,13 @@ impl Datastore {
         } else {
             let segments = split_canonical_segments(&parsed.canonical_path);
             let mut predicate_index = 0usize;
-            set_at_path(
-                &mut tree,
-                &self.model,
-                &segments,
-                0,
-                String::new(),
-                &parsed.predicates,
-                &mut predicate_index,
-                value,
-            )?;
+            let mut ctx = TreeCtx {
+                model: &self.model,
+                segments: &segments,
+                predicates: &parsed.predicates,
+                predicate_index: &mut predicate_index,
+            };
+            set_at_path(&mut tree, &mut ctx, 0, String::new(), value)?;
             if predicate_index != parsed.predicates.len() {
                 return Err(CoreconfError::ValidationError(format!(
                     "unused predicates in path '{path}'"
@@ -238,15 +235,9 @@ impl Datastore {
     /// `["[type='coreconf-m2m:solar-radiation'][id='0']", ...]`.
     pub fn predicates(&self, path: &str) -> Result<Vec<String>> {
         let (list_sid, existing_keys) = self.resolve_xpath(path)?;
-        let key_sids = self
-            .model
-            .get_keys(list_sid)
-            .cloned()
-            .ok_or_else(|| {
-                CoreconfError::ValidationError(format!(
-                    "path is not a keyed list: '{path}'"
-                ))
-            })?;
+        let key_sids = self.model.get_keys(list_sid).cloned().ok_or_else(|| {
+            CoreconfError::ValidationError(format!("path is not a keyed list: '{path}'"))
+        })?;
 
         // If the XPath already includes predicates, return that single filter.
         if !existing_keys.is_empty() {
@@ -258,18 +249,11 @@ impl Datastore {
         let tree = self.backend.read_tree();
         let segments = split_canonical_segments(path);
 
-        let list_value = match get_at_path(
-            &tree,
-            &self.model,
-            &segments,
-            0,
-            String::new(),
-            &[],
-            &mut 0,
-        )? {
-            Some(val) => val,
-            None => return Ok(Vec::new()),
-        };
+        let list_value =
+            match get_at_path(&tree, &self.model, &segments, 0, String::new(), &[], &mut 0)? {
+                Some(val) => val,
+                None => return Ok(Vec::new()),
+            };
 
         let list_name = segments.last().copied().unwrap_or("");
         let storage_key = storage_key(list_name, segments.len() - 1);
@@ -290,9 +274,10 @@ impl Datastore {
             let mut values = Vec::with_capacity(key_sids.len());
             let mut complete = true;
             for key_sid in &key_sids {
-                let key_identifier = self.model.get_identifier(*key_sid).ok_or({
-                    CoreconfError::IdentifierNotFound(*key_sid)
-                })?;
+                let key_identifier = self
+                    .model
+                    .get_identifier(*key_sid)
+                    .ok_or(CoreconfError::IdentifierNotFound(*key_sid))?;
                 let key_leaf = segment_leaf(key_identifier);
                 match entry_obj.get(key_leaf) {
                     Some(val) => values.push(val.clone()),
@@ -303,8 +288,7 @@ impl Datastore {
                 }
             }
             if complete {
-                let predicate_str =
-                    format_predicate_string(&self.model, &key_sids, &values)?;
+                let predicate_str = format_predicate_string(&self.model, &key_sids, &values)?;
                 result.push(predicate_str);
             }
         }
@@ -382,9 +366,7 @@ impl Datastore {
             };
 
             let seg_sid = self.model.get_sid(&current_path);
-            let is_list = seg_sid
-                .and_then(|sid| self.model.get_keys(sid))
-                .is_some();
+            let is_list = seg_sid.and_then(|sid| self.model.get_keys(sid)).is_some();
 
             if is_list {
                 let list_sid = seg_sid.unwrap();
@@ -398,9 +380,10 @@ impl Datastore {
                     let key_value = &keys[key_index];
                     key_index += 1;
 
-                    let key_identifier = self.model.get_identifier(*key_sid).ok_or({
-                        CoreconfError::IdentifierNotFound(*key_sid)
-                    })?;
+                    let key_identifier = self
+                        .model
+                        .get_identifier(*key_sid)
+                        .ok_or(CoreconfError::IdentifierNotFound(*key_sid))?;
                     let key_name = segment_leaf(key_identifier);
 
                     let formatted = format_key_value(&self.model, key_identifier, key_value)?;
@@ -520,43 +503,39 @@ fn get_at_path(
     }
 }
 
+/// Shared context for tree traversal functions, coalescing common arguments.
+struct TreeCtx<'a, 'b> {
+    model: &'a CompositeModel,
+    segments: &'a [&'a str],
+    predicates: &'a [(String, String)],
+    predicate_index: &'b mut usize,
+}
+
 fn set_at_path(
     current: &mut Value,
-    model: &CompositeModel,
-    segments: &[&str],
+    ctx: &mut TreeCtx<'_, '_>,
     depth: usize,
     current_path: String,
-    predicates: &[(String, String)],
-    predicate_index: &mut usize,
     value: Value,
 ) -> Result<()> {
-    let segment = segments[depth];
+    let segment = ctx.segments[depth];
     let next_path = join_path(&current_path, segment);
-    let list_keys = list_keys(model, &next_path)?;
+    let list_keys = list_keys(ctx.model, &next_path)?;
 
     if list_keys.is_empty() {
         let map = ensure_object(current)?;
         let key = storage_key(segment, depth);
-        if depth == segments.len() - 1 {
+        if depth == ctx.segments.len() - 1 {
             map.insert(key, value);
             return Ok(());
         }
 
         let child = map.entry(key).or_insert_with(|| Value::Object(Map::new()));
-        set_at_path(
-            child,
-            model,
-            segments,
-            depth + 1,
-            next_path,
-            predicates,
-            predicate_index,
-            value,
-        )
+        set_at_path(child, ctx, depth + 1, next_path, value)
     } else {
-        let end = *predicate_index + list_keys.len();
-        let has_predicates = end <= predicates.len();
-        let is_last = depth == segments.len() - 1;
+        let end = *ctx.predicate_index + list_keys.len();
+        let has_predicates = end <= ctx.predicates.len();
+        let is_last = depth == ctx.segments.len() - 1;
 
         if !has_predicates && !is_last {
             return Err(CoreconfError::ValidationError(format!(
@@ -572,7 +551,8 @@ fn set_at_path(
             return Ok(());
         }
 
-        let key_values = consume_key_values(model, &list_keys, predicates, predicate_index)?;
+        let key_values =
+            consume_key_values(ctx.model, &list_keys, ctx.predicates, ctx.predicate_index)?;
         let map = ensure_object(current)?;
         let list = map
             .entry(storage_key(segment, depth))
@@ -580,7 +560,7 @@ fn set_at_path(
         let entries = ensure_array(list)?;
         let entry = find_or_create_list_entry(entries, &key_values);
 
-        if depth == segments.len() - 1 {
+        if depth == ctx.segments.len() - 1 {
             let mut next_value = value;
             if let Value::Object(map) = &mut next_value {
                 for (key, key_value) in &key_values {
@@ -591,16 +571,7 @@ fn set_at_path(
             return Ok(());
         }
 
-        set_at_path(
-            entry,
-            model,
-            segments,
-            depth + 1,
-            next_path,
-            predicates,
-            predicate_index,
-            value,
-        )
+        set_at_path(entry, ctx, depth + 1, next_path, value)
     }
 }
 
@@ -738,10 +709,13 @@ fn consume_key_values(
         for (expected_name, identifier_value) in expected_keys {
             let identifier = identifier_value.as_str().unwrap_or_default();
             let Some((matched_index, (_, actual_value))) =
-                predicate_slice.iter().enumerate().find(|(index, (actual_name, _))| {
-                    !matched[*index]
-                        && predicate_name_matches(expected_name, identifier, actual_name)
-                })
+                predicate_slice
+                    .iter()
+                    .enumerate()
+                    .find(|(index, (actual_name, _))| {
+                        !matched[*index]
+                            && predicate_name_matches(expected_name, identifier, actual_name)
+                    })
             else {
                 return Err(CoreconfError::ValidationError(format!(
                     "missing predicate for expected key '{expected_name}'"
@@ -812,12 +786,7 @@ fn coerce_predicate_value(model: &CompositeModel, identifier: &str, raw: &str) -
                 })?;
             Ok(Value::Number((*int_val).into()))
         }
-        Some(
-            YangType::Int8
-            | YangType::Int16
-            | YangType::Int32
-            | YangType::Int64,
-        ) => raw
+        Some(YangType::Int8 | YangType::Int16 | YangType::Int32 | YangType::Int64) => raw
             .parse::<i64>()
             .map(|value| Value::Number(value.into()))
             .map_err(|_| CoreconfError::TypeConversion(format!("cannot parse '{raw}' as integer"))),
@@ -954,17 +923,13 @@ fn format_predicate_string(
 }
 
 /// Format a key value for display in an XPath predicate string.
-fn format_key_value(
-    model: &CompositeModel,
-    identifier: &str,
-    value: &Value,
-) -> Result<String> {
+fn format_key_value(model: &CompositeModel, identifier: &str, value: &Value) -> Result<String> {
     match model.get_type(identifier) {
         Some(YangType::Identityref) => {
             // Convert numeric SID back to identity name.
-            let sid = value
-                .as_i64()
-                .ok_or_else(|| CoreconfError::TypeConversion("expected integer SID for identityref".into()))?;
+            let sid = value.as_i64().ok_or_else(|| {
+                CoreconfError::TypeConversion("expected integer SID for identityref".into())
+            })?;
             let identity = model
                 .get_identifier(sid)
                 .map(|id| id.trim_start_matches('/').to_string())
@@ -976,9 +941,7 @@ fn format_key_value(
             if let Some(num) = value.as_i64() {
                 let key = num.to_string();
                 // Reverse lookup: find the name that maps to this integer value.
-                if let Some((name, _)) =
-                    enum_map.iter().find(|(_, v)| **v == num)
-                {
+                if let Some((name, _)) = enum_map.iter().find(|(_, v)| **v == num) {
                     return Ok(name.clone());
                 }
                 return Ok(key);

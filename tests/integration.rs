@@ -4,10 +4,10 @@
 //! These self-contained tests ensure the library works standalone.
 
 use rust_coreconf::coap_types::{ContentFormat, Method, Request};
+use rust_coreconf::instance_id::{encode_identifiers, encode_instances};
 use rust_coreconf::{
     CompositeModel, CoreconfModel, Datastore, Instance, InstancePath, RequestHandler,
 };
-use rust_coreconf::instance_id::{encode_identifiers, encode_instances};
 
 const SAMPLE_SID: &str = r#"{
     "assignment-range": [{"entry-point": 60000, "size": 10}],

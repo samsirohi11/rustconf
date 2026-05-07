@@ -32,7 +32,11 @@ fn m2m_create_and_read_list_entry_with_identityref_key() {
         "/coreconf-m2m:transducers/transducer[type='coreconf-m2m:solar-radiation'][id='0']/precision",
         json!(2),
     );
-    assert!(result.is_ok(), "set at leaf inside list failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "set at leaf inside list failed: {:?}",
+        result.err()
+    );
 
     let value = ds.get_path(
         "/coreconf-m2m:transducers/transducer[type='coreconf-m2m:solar-radiation'][id='0']/precision"
@@ -40,7 +44,9 @@ fn m2m_create_and_read_list_entry_with_identityref_key() {
     assert_eq!(value, Some(json!(2)));
 
     // Verify predicates.
-    let preds = ds.predicates("/coreconf-m2m:transducers/transducer").unwrap();
+    let preds = ds
+        .predicates("/coreconf-m2m:transducers/transducer")
+        .unwrap();
     assert_eq!(preds.len(), 1);
     assert!(preds[0].contains("solar-radiation"));
     assert!(preds[0].contains("id='0'"));
@@ -161,8 +167,7 @@ fn m2m_resolve_and_create_xpath_roundtrip() {
         )
         .unwrap();
 
-    let xpath =
-        "/coreconf-m2m:transducers/transducer[type='coreconf-m2m:solar-radiation'][id='0']/precision";
+    let xpath = "/coreconf-m2m:transducers/transducer[type='coreconf-m2m:solar-radiation'][id='0']/precision";
 
     // Resolve to (SID, keys).
     let (sid, keys) = datastore.resolve_xpath(xpath).unwrap();
@@ -291,7 +296,11 @@ fn simple_leaf_set_inside_list() {
         "/coreconf-m2m:transducers/transducer[type='coreconf-m2m:solar-radiation'][id='0']/precision",
         json!(2),
     );
-    assert!(result.is_ok(), "set at leaf inside list failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "set at leaf inside list failed: {:?}",
+        result.err()
+    );
 
     let value = ds.get_path(
         "/coreconf-m2m:transducers/transducer[type='coreconf-m2m:solar-radiation'][id='0']/precision"
