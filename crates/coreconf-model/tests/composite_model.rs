@@ -1,4 +1,4 @@
-use coreconf_model::{CompositeModel, CoreconfError, YangType};
+use coreconf_model::{CompositeModel, CoreconfError, SidFile, YangType};
 
 #[test]
 fn composite_model_resolves_multiple_sid_files() {
@@ -138,4 +138,64 @@ fn composite_model_rejects_key_mapping_conflicts_across_sid_files() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn parses_real_m2m_sid_file() {
+    let sid_path =
+        std::path::Path::new("../pycoreconf/samples/datastore/coreconf-m2m@2026-03-29.sid");
+    if !sid_path.exists() {
+        // Skip if the pycoreconf checkout isn't available
+        eprintln!("m2m SID file not found — skipping integration test");
+        return;
+    }
+
+    let sid_file = SidFile::from_file(sid_path).unwrap();
+    let model = CompositeModel::from_sid_files(vec![sid_file]).unwrap();
+
+    // Verify identities are stored as module_name:identity_name
+    assert_eq!(
+        model.get_sid("coreconf-m2m:solar-radiation"),
+        Some(100008)
+    );
+    assert_eq!(
+        model.get_sid("coreconf-m2m:air-temperature"),
+        Some(100001)
+    );
+
+    // Verify data nodes keep full paths
+    assert_eq!(
+        model.get_sid("/coreconf-m2m:transducers"),
+        Some(100062)
+    );
+    assert_eq!(
+        model.get_sid("/coreconf-m2m:transducers/transducer"),
+        Some(100063)
+    );
+
+    // Verify types
+    assert_eq!(
+        model.get_type("/coreconf-m2m:transducers/transducer/type"),
+        Some(&YangType::Identityref)
+    );
+    assert_eq!(
+        model.get_type("/coreconf-m2m:transducers/transducer/unit"),
+        Some(&YangType::String)
+    );
+    assert_eq!(
+        model.get_type("/coreconf-m2m:transducers/transducer/precision"),
+        Some(&YangType::Uint8)
+    );
+
+    // Verify enums
+    let encoding_type = model.get_type(
+        "/coreconf-m2m:transducers/transducer/notification-parameters/history/encoding",
+    );
+    assert!(encoding_type.is_some());
+
+    // Verify key mapping: transducer list has keys [type, id]
+    let keys = model.get_keys(100063).unwrap();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[0], 100096); // type
+    assert_eq!(keys[1], 100064); // id
 }
