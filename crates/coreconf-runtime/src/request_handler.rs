@@ -51,7 +51,10 @@ impl RequestHandler {
     fn handle_get(&self, request: &Request) -> Response {
         if request.path.is_empty() {
             return match self.datastore.get_all_cbor() {
-                Ok(cbor) => Response::content(cbor, ContentFormat::YangDataCbor),
+                Ok(cbor) => {
+                    let filtered = apply_query_filters(&cbor, &request.query);
+                    Response::content(filtered, ContentFormat::YangDataCbor)
+                }
                 Err(error) => {
                     Response::error(ResponseCode::InternalServerError, &error.to_string())
                 }
@@ -60,7 +63,10 @@ impl RequestHandler {
 
         match self.datastore.get_path(&request.path) {
             Ok(Some(value)) => match encode_json_value(&value) {
-                Ok(payload) => Response::content(payload, ContentFormat::YangDataCbor),
+                Ok(payload) => {
+                    let filtered = apply_query_filters(&payload, &request.query);
+                    Response::content(filtered, ContentFormat::YangDataCbor)
+                }
                 Err(error) => {
                     Response::error(ResponseCode::InternalServerError, &error.to_string())
                 }
@@ -312,4 +318,18 @@ fn encode_json_value(value: &Value) -> Result<Vec<u8>> {
 
 fn decode_json_value(payload: &[u8]) -> Result<Value> {
     ciborium::from_reader(payload).map_err(|error| CoreconfError::CborDecode(error.to_string()))
+}
+
+/// Apply `c=` (content) and `d=` (defaults) query filters to a CBOR payload.
+///
+/// Currently returns the payload unchanged because:
+/// - The datastore has a single schema tree (no candidate/running/startup split),
+///   so all `c=` values behave identically.
+/// - SID files do not carry leaf default values, so `d=t` (trim defaults) cannot
+///   be applied yet.
+///
+/// When multi-datastore support and default-value tracking are added, this
+/// function will perform the filtering as specified in RFC 9595 § 4.1.
+fn apply_query_filters(payload: &[u8], _query: &crate::coap_types::QueryParams) -> Vec<u8> {
+    payload.to_vec()
 }
