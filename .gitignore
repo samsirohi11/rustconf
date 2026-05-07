@@ -1,3 +1,6 @@
 target
 cargo.lock
 .worktrees
+.pi/
+CONTEXT.md
+docs/
