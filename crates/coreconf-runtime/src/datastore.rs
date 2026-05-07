@@ -231,6 +231,185 @@ impl Datastore {
     pub fn encode_instances(&self, instances: &[Instance]) -> Result<Vec<u8>> {
         encode_instances(instances)
     }
+
+    /// Return list-key predicate strings for entries under a list XPath.
+    ///
+    /// Example: `ds.predicates("/transducers/transducer")` returns
+    /// `["[type='coreconf-m2m:solar-radiation'][id='0']", ...]`.
+    pub fn predicates(&self, path: &str) -> Result<Vec<String>> {
+        let (list_sid, existing_keys) = self.resolve_xpath(path)?;
+        let key_sids = self
+            .model
+            .get_keys(list_sid)
+            .cloned()
+            .ok_or_else(|| {
+                CoreconfError::ValidationError(format!(
+                    "path is not a keyed list: '{path}'"
+                ))
+            })?;
+
+        // If the XPath already includes predicates, return that single filter.
+        if !existing_keys.is_empty() {
+            let predicate_str = format_predicate_string(&self.model, &key_sids, &existing_keys)?;
+            return Ok(vec![predicate_str]);
+        }
+
+        // Enumerate all entries in the list.
+        let tree = self.backend.read_tree();
+        let segments = split_canonical_segments(path);
+
+        let list_value = match get_at_path(
+            &tree,
+            &self.model,
+            &segments,
+            0,
+            String::new(),
+            &[],
+            &mut 0,
+        )? {
+            Some(val) => val,
+            None => return Ok(Vec::new()),
+        };
+
+        let list_name = segments.last().copied().unwrap_or("");
+        let storage_key = storage_key(list_name, segments.len() - 1);
+        let entries = list_value
+            .as_object()
+            .and_then(|map| map.get(&storage_key))
+            .and_then(Value::as_array)
+            .map(|arr| arr.to_vec())
+            .unwrap_or_default();
+
+        let mut result = Vec::with_capacity(entries.len());
+        for entry in &entries {
+            let entry_obj = match entry.as_object() {
+                Some(obj) => obj,
+                None => continue,
+            };
+
+            let mut values = Vec::with_capacity(key_sids.len());
+            let mut complete = true;
+            for key_sid in &key_sids {
+                let key_identifier = self.model.get_identifier(*key_sid).ok_or({
+                    CoreconfError::IdentifierNotFound(*key_sid)
+                })?;
+                let key_leaf = segment_leaf(key_identifier);
+                match entry_obj.get(key_leaf) {
+                    Some(val) => values.push(val.clone()),
+                    None => {
+                        complete = false;
+                        break;
+                    }
+                }
+            }
+            if complete {
+                let predicate_str =
+                    format_predicate_string(&self.model, &key_sids, &values)?;
+                result.push(predicate_str);
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Resolve an XPath string to (target SID, key values).
+    ///
+    /// This is the inverse of `create_xpath`.
+    pub fn resolve_xpath(&self, path: &str) -> Result<(i64, Vec<Value>)> {
+        let parsed = PredicatePath::parse(path)?;
+        let target_sid = self
+            .model
+            .get_sid(&parsed.canonical_path)
+            .ok_or_else(|| CoreconfError::SidNotFound(parsed.canonical_path.clone()))?;
+
+        let mut key_values = Vec::new();
+        if !parsed.predicates.is_empty() {
+            let list_keys = list_keys(&self.model, &parsed.canonical_path)?;
+            let mut predicate_index = 0usize;
+            key_values = consume_key_values(
+                &self.model,
+                &list_keys,
+                &parsed.predicates,
+                &mut predicate_index,
+            )?
+            .into_iter()
+            .map(|(_, v)| v)
+            .collect();
+            if predicate_index != parsed.predicates.len() {
+                return Err(CoreconfError::ValidationError(format!(
+                    "unused predicates in path '{path}'"
+                )));
+            }
+        }
+
+        Ok((target_sid, key_values))
+    }
+
+    /// Convert a target SID and optional key values back to an XPath string.
+    ///
+    /// This is the inverse of `resolve_xpath`.
+    pub fn create_xpath(&self, sid: i64, keys: &[Value]) -> Result<String> {
+        let identifier = self
+            .model
+            .get_identifier(sid)
+            .ok_or(CoreconfError::IdentifierNotFound(sid))?;
+
+        let segments: Vec<&str> = identifier
+            .trim_start_matches('/')
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let mut xpath_parts = Vec::with_capacity(segments.len());
+        let mut current_path = String::new();
+        let mut key_index = 0usize;
+
+        for segment in &segments {
+            let local_name = segment.split(':').next_back().unwrap_or(segment);
+            current_path = if current_path.is_empty() {
+                format!("/{segment}")
+            } else {
+                format!("{current_path}/{segment}")
+            };
+
+            let seg_sid = self.model.get_sid(&current_path);
+            let is_list = seg_sid
+                .and_then(|sid| self.model.get_keys(sid))
+                .is_some();
+
+            if is_list {
+                let list_sid = seg_sid.unwrap();
+                let key_sids = self.model.get_keys(list_sid).unwrap();
+                let mut predicates = Vec::with_capacity(key_sids.len());
+
+                for key_sid in key_sids {
+                    if key_index >= keys.len() {
+                        break;
+                    }
+                    let key_value = &keys[key_index];
+                    key_index += 1;
+
+                    let key_identifier = self.model.get_identifier(*key_sid).ok_or({
+                        CoreconfError::IdentifierNotFound(*key_sid)
+                    })?;
+                    let key_name = segment_leaf(key_identifier);
+
+                    let formatted = format_key_value(&self.model, key_identifier, key_value)?;
+                    predicates.push(format!("{key_name}='{formatted}'"));
+                }
+
+                if !predicates.is_empty() {
+                    xpath_parts.push(format!("{local_name}{}", predicates.concat()));
+                } else {
+                    xpath_parts.push(local_name.to_string());
+                }
+            } else {
+                xpath_parts.push(local_name.to_string());
+            }
+        }
+
+        Ok(format!("/{}", xpath_parts.join("/")))
+    }
 }
 
 fn encode_identifier_value_to_cbor(model: &CompositeModel, value: &Value) -> Result<Vec<u8>> {
@@ -711,4 +890,66 @@ fn segment_leaf(segment: &str) -> &str {
         .split(':')
         .next_back()
         .unwrap_or(segment)
+}
+
+/// Format predicate string from key SIDs and values (e.g., "[type='solar-radiation'][id='0']").
+fn format_predicate_string(
+    model: &CompositeModel,
+    key_sids: &[i64],
+    key_values: &[Value],
+) -> Result<String> {
+    let mut parts = String::new();
+    for (key_sid, key_value) in key_sids.iter().zip(key_values.iter()) {
+        let key_identifier = model
+            .get_identifier(*key_sid)
+            .ok_or(CoreconfError::IdentifierNotFound(*key_sid))?;
+        let key_name = segment_leaf(key_identifier);
+        let formatted = format_key_value(model, key_identifier, key_value)?;
+        parts.push_str(&format!("[{key_name}='{formatted}']"));
+    }
+    Ok(parts)
+}
+
+/// Format a key value for display in an XPath predicate string.
+fn format_key_value(
+    model: &CompositeModel,
+    identifier: &str,
+    value: &Value,
+) -> Result<String> {
+    match model.get_type(identifier) {
+        Some(YangType::Identityref) => {
+            // Convert numeric SID back to identity name.
+            let sid = value
+                .as_i64()
+                .ok_or_else(|| CoreconfError::TypeConversion("expected integer SID for identityref".into()))?;
+            let identity = model
+                .get_identifier(sid)
+                .map(|id| id.trim_start_matches('/').to_string())
+                .unwrap_or_else(|| sid.to_string());
+            Ok(identity)
+        }
+        Some(YangType::Enumeration(enum_map)) => {
+            // Convert numeric value to enum name.
+            if let Some(num) = value.as_i64() {
+                let key = num.to_string();
+                // Reverse lookup: find the name that maps to this integer value.
+                if let Some((name, _)) =
+                    enum_map.iter().find(|(_, v)| **v == num)
+                {
+                    return Ok(name.clone());
+                }
+                return Ok(key);
+            }
+            Ok(value.to_string())
+        }
+        _ => {
+            // For string keys, strip quotes. For numeric keys, format as string.
+            match value {
+                Value::String(s) => Ok(s.clone()),
+                Value::Number(n) => Ok(n.to_string()),
+                Value::Bool(b) => Ok(b.to_string()),
+                _ => Ok(value.to_string()),
+            }
+        }
+    }
 }
