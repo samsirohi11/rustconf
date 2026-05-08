@@ -109,8 +109,19 @@ impl CompositeModel {
         self.process_value_for_sid(&json_data, None, 0)
     }
 
+    /// Decode CORECONF CBOR to identifier-keyed JSON, converting SIDs to
+    /// human-readable names for identityref and enumeration leaf values.
     pub fn sid_value_to_identifier_value(&self, coreconf_data: Value) -> Result<Value> {
-        self.process_value_for_identifier(&coreconf_data, 0, None)
+        self.process_value_for_identifier(&coreconf_data, 0, None, true)
+    }
+
+    /// Like `sid_value_to_identifier_value`, but preserves integer SIDs for
+    /// identityref and enumeration leaf values (needed for datastore key matching).
+    pub fn sid_value_to_identifier_value_preserve_sids(
+        &self,
+        coreconf_data: Value,
+    ) -> Result<Value> {
+        self.process_value_for_identifier(&coreconf_data, 0, None, false)
     }
 
     fn process_value_for_sid(
@@ -162,6 +173,7 @@ impl CompositeModel {
         value: &Value,
         delta: i64,
         current_path: Option<&str>,
+        resolve_identityref: bool,
     ) -> Result<Value> {
         match value {
             Value::Object(map) => {
@@ -174,22 +186,45 @@ impl CompositeModel {
                     let identifier = self
                         .get_identifier(sid)
                         .ok_or(CoreconfError::IdentifierNotFound(sid))?;
-                    let leaf_name = identifier.split('/').next_back().unwrap_or(identifier);
-                    let processed = self.process_value_for_identifier(v, sid, Some(identifier))?;
-                    new_map.insert(leaf_name.to_string(), processed);
+                    // Use storage_key logic: full module-qualified name at
+                    // the top level, just the leaf name at deeper levels,
+                    // matching how Datastore::set_path stores keys.
+                    let depth = identifier.chars().filter(|&c| c == '/').count();
+                    let storage_key = if depth <= 1 {
+                        identifier.trim_start_matches('/').to_string()
+                    } else {
+                        identifier
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(identifier)
+                            .to_string()
+                    };
+                    let processed = self.process_value_for_identifier(
+                        v,
+                        sid,
+                        Some(identifier),
+                        resolve_identityref,
+                    )?;
+                    new_map.insert(storage_key, processed);
                 }
                 Ok(Value::Object(new_map))
             }
             Value::Array(arr) => {
                 let mut new_arr = Vec::with_capacity(arr.len());
                 for elem in arr {
-                    new_arr.push(self.process_value_for_identifier(elem, delta, current_path)?);
+                    new_arr.push(self.process_value_for_identifier(
+                        elem,
+                        delta,
+                        current_path,
+                        resolve_identityref,
+                    )?);
                 }
                 Ok(Value::Array(new_arr))
             }
             _ => {
                 if let Some(path) = current_path
                     && let Some(yang_type) = self.get_type(path)
+                    && resolve_identityref
                 {
                     let id_lookup = |sid: i64| self.get_identifier(sid).map(str::to_string);
                     let module_name = self.module_name_for_identifier(path).unwrap_or_default();

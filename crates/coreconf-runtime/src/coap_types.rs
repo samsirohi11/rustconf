@@ -1,3 +1,32 @@
+/// CORECONF interface type — distinguishes management (`/c`) from streaming (`/s`).
+///
+/// Per draft-ietf-core-comi:
+/// - `/c`  (management) handles GET, FETCH, iPATCH, POST on configuration/telemetry data.
+/// - `/s`  (streaming) handles FETCH+Observe for time-series and event notifications.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Interface {
+    Management,
+    Streaming,
+}
+
+impl Interface {
+    /// Recognise the standard CORECONF URI path segments.
+    pub fn from_uri_segment(segment: &str) -> Option<Self> {
+        match segment {
+            "c" => Some(Self::Management),
+            "s" => Some(Self::Streaming),
+            _ => None,
+        }
+    }
+
+    pub fn as_uri_segment(self) -> &'static str {
+        match self {
+            Self::Management => "c",
+            Self::Streaming => "s",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum ContentFormat {
@@ -166,6 +195,10 @@ pub struct Request {
     pub payload: Vec<u8>,
     pub content_format: Option<ContentFormat>,
     pub query: QueryParams,
+    /// Which CORECONF interface this request targets (`/c` or `/s`).
+    pub interface: Option<Interface>,
+    /// CoAP Observe option: `Some(0)` = register, `Some(n)` = notification.
+    pub observe: Option<u32>,
 }
 
 impl Request {
@@ -176,6 +209,8 @@ impl Request {
             payload: Vec::new(),
             content_format: None,
             query: QueryParams::default(),
+            interface: None,
+            observe: None,
         }
     }
 
@@ -194,6 +229,16 @@ impl Request {
         self.query = query;
         self
     }
+
+    pub fn with_interface(mut self, interface: Interface) -> Self {
+        self.interface = Some(interface);
+        self
+    }
+
+    pub fn with_observe(mut self, observe: u32) -> Self {
+        self.observe = Some(observe);
+        self
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +246,8 @@ pub struct Response {
     pub code: ResponseCode,
     pub payload: Vec<u8>,
     pub content_format: Option<ContentFormat>,
+    /// CoAP Observe sequence number (present on notifications).
+    pub observe: Option<u32>,
 }
 
 impl Response {
@@ -209,6 +256,16 @@ impl Response {
             code: ResponseCode::Content,
             payload,
             content_format: Some(format),
+            observe: None,
+        }
+    }
+
+    pub fn observe(payload: Vec<u8>, format: ContentFormat, sequence: u32) -> Self {
+        Self {
+            code: ResponseCode::Content,
+            payload,
+            content_format: Some(format),
+            observe: Some(sequence),
         }
     }
 
@@ -217,6 +274,7 @@ impl Response {
             code: ResponseCode::Changed,
             payload: Vec::new(),
             content_format: None,
+            observe: None,
         }
     }
 
@@ -225,6 +283,7 @@ impl Response {
             code,
             payload: message.as_bytes().to_vec(),
             content_format: None,
+            observe: None,
         }
     }
 

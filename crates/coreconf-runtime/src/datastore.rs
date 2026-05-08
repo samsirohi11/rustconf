@@ -27,6 +27,40 @@ impl Datastore {
         Ok(Self::with_data(model, data))
     }
 
+    /// Build a datastore from a CORECONF CBOR payload (e.g. a FETCH or GET
+    /// response).  Decodes the SID-keyed CBOR into an identifier-keyed JSON
+    /// tree and populates the datastore.  Used during device bootstrap and
+    /// observation-notification handling.
+    ///
+    /// ## Example
+    ///
+    /// ```ignore
+    /// let model = CoreconfModel::from_sid_file("model.sid")?;
+    /// let cbor_payload: Vec<u8> = /* CoAP FETCH response */;
+    /// let ds = Datastore::from_cbor(model, &cbor_payload)?;
+    /// ```
+    pub fn from_cbor(model: CoreconfModel, cbor: &[u8]) -> Result<Self> {
+        let coreconf_value: serde_json::Value =
+            ciborium::from_reader(cbor).map_err(|e| CoreconfError::CborDecode(e.to_string()))?;
+        let value = model
+            .composite_model()
+            .sid_value_to_identifier_value_preserve_sids(coreconf_value)?;
+        Ok(Self::with_data(model, value))
+    }
+
+    /// Replace the entire datastore tree with a decoded CBOR payload.
+    ///
+    /// This is used for observe notifications where each response carries
+    /// a complete replacement of a subtree (e.g. history time-series).
+    pub fn replace_from_cbor(&mut self, cbor: &[u8]) -> Result<()> {
+        let coreconf_value: serde_json::Value =
+            ciborium::from_reader(cbor).map_err(|e| CoreconfError::CborDecode(e.to_string()))?;
+        let value = self
+            .model
+            .sid_value_to_identifier_value_preserve_sids(coreconf_value)?;
+        self.backend.replace_tree(value)
+    }
+
     pub fn new_in_memory(model: CompositeModel) -> Self {
         Self {
             model,

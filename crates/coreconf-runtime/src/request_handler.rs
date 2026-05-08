@@ -2,7 +2,7 @@ use coreconf_model::instance_id::decode_instances;
 use coreconf_model::{CoreconfError, Instance, InstancePath, Result};
 use serde_json::Value;
 
-use crate::coap_types::{ContentFormat, Method, Request, Response, ResponseCode};
+use crate::coap_types::{ContentFormat, Interface, Method, Request, Response, ResponseCode};
 use crate::datastore::Datastore;
 use crate::operations::{OperationBinding, OperationRegistry};
 use crate::path::PredicatePath;
@@ -10,6 +10,8 @@ use crate::path::PredicatePath;
 pub struct RequestHandler {
     datastore: Datastore,
     operations: OperationRegistry,
+    /// Observe sequence counter (incremented on each notification).
+    observe_sequence: u32,
 }
 
 impl RequestHandler {
@@ -17,6 +19,7 @@ impl RequestHandler {
         Self {
             datastore,
             operations: OperationRegistry::default(),
+            observe_sequence: 0,
         }
     }
 
@@ -24,6 +27,7 @@ impl RequestHandler {
         Self {
             datastore,
             operations,
+            observe_sequence: 0,
         }
     }
 
@@ -40,12 +44,41 @@ impl RequestHandler {
     }
 
     pub fn handle(&mut self, request: &Request) -> Response {
+        // Streaming interface (`/s`) only accepts FETCH+Observe.
+        if request.interface == Some(Interface::Streaming) {
+            return self.handle_streaming(request);
+        }
+
         match request.method {
             Method::Get => self.handle_get(request),
             Method::Fetch => self.handle_fetch(request),
             Method::IPatch => self.handle_ipatch(request),
             Method::Post => self.handle_post(request),
         }
+    }
+
+    /// Handle a request on the streaming interface (`/s`).
+    ///
+    /// Only FETCH is permitted; observe is optional but typical for `/s`.
+    fn handle_streaming(&mut self, request: &Request) -> Response {
+        if request.method != Method::Fetch {
+            return Response::error(
+                ResponseCode::MethodNotAllowed,
+                &format!("{} not allowed on streaming interface", request.method),
+            );
+        }
+
+        let mut response = self.handle_fetch(request);
+
+        // If the client registered for observe, stamp the response with
+        // the current sequence number.
+        if request.observe == Some(0) && response.code.is_success() {
+            let seq = self.observe_sequence;
+            self.observe_sequence = self.observe_sequence.wrapping_add(1);
+            response.observe = Some(seq);
+        }
+
+        response
     }
 
     fn handle_get(&self, request: &Request) -> Response {

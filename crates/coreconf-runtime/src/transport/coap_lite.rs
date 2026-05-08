@@ -8,7 +8,9 @@ use coap_lite::{
 use coreconf_model::{CompositeModel, CoreconfError, Result};
 use serde_json::Value;
 
-use crate::coap_types::{ContentFormat, Method, QueryParams, Request, Response, ResponseCode};
+use crate::coap_types::{
+    ContentFormat, Interface, Method, QueryParams, Request, Response, ResponseCode,
+};
 use crate::request_handler::RequestHandler;
 
 pub trait CoreconfClient {
@@ -193,7 +195,31 @@ pub fn packet_to_request(
     let Some(remaining_path) = uri_path.strip_prefix(resource_path.trim_matches('/')) else {
         return Err(Response::not_found(&uri_path));
     };
-    let path = remaining_path.trim_start_matches('/');
+    let remaining = remaining_path.trim_start_matches('/');
+
+    // Extract CORECONF interface from the first URI path segment (`c` or `s`).
+    //
+    // When resource_path is empty, the raw URI path carries the interface
+    // (e.g. "c" or "c/some/path").  When resource_path is already the
+    // interface segment (e.g. "c"), remaining will be empty and the
+    // interface is inferred from the resource_path itself.
+    let (path, interface) = if remaining.is_empty() {
+        // No sub-path — infer interface from resource_path (legacy compatibility).
+        (
+            String::new(),
+            Interface::from_uri_segment(resource_path.trim_matches('/')),
+        )
+    } else if let Some((first, rest)) = remaining.split_once('/') {
+        if let Some(iface) = Interface::from_uri_segment(first) {
+            (rest.to_string(), Some(iface))
+        } else {
+            (remaining.to_string(), None)
+        }
+    } else if let Some(iface) = Interface::from_uri_segment(remaining) {
+        (String::new(), Some(iface))
+    } else {
+        (remaining.to_string(), None)
+    };
 
     let mut request = Request::new(method).with_path(if path.is_empty() {
         String::new()
@@ -206,6 +232,16 @@ pub fn packet_to_request(
         .and_then(|format| content_format_from_coap(method, format))
         .or_else(|| default_content_format(method, &request.payload));
     request.query = uri_query(packet);
+
+    if let Some(iface) = interface {
+        request.interface = Some(iface);
+    }
+
+    // Parse CoAP Observe option.
+    if let Some(Ok(observe_value)) = packet.get_observe_value() {
+        request.observe = Some(observe_value);
+    }
+
     Ok(request)
 }
 
@@ -221,6 +257,12 @@ pub fn response_to_packet(request: &Packet, response: Response) -> Packet {
             packet.set_content_format(content_format_to_coap(format));
         }
     }
+
+    // Stamp CoAP Observe sequence number on notifications.
+    if let Some(sequence) = response.observe {
+        packet.set_observe_value(sequence);
+    }
+
     packet
 }
 

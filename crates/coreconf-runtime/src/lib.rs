@@ -9,6 +9,9 @@ pub mod request_handler;
 pub mod transport;
 
 pub use backend::Backend;
+pub use coap_types::{
+    ContentFormat, Interface, Method, QueryParams, Request, Response, ResponseCode,
+};
 pub use datastore::Datastore;
 pub use file_backend::{EditableFormat, FileBackend, encode_editable_value, read_editable_file};
 pub use memory_backend::MemoryBackend;

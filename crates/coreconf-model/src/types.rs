@@ -172,6 +172,10 @@ pub fn cast_to_coreconf(
             Ok(Value::Bool(b))
         }
         YangType::Identityref => {
+            // Accept an integer SID directly (as stored by from_cbor).
+            if let Some(n) = value.as_i64() {
+                return Ok(Value::Number(n.into()));
+            }
             let s = value.as_str().ok_or_else(|| {
                 CoreconfError::TypeConversion(format!("cannot convert {value:?} to identityref"))
             })?;
