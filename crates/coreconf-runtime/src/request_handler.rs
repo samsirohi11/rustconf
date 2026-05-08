@@ -2,16 +2,30 @@ use coreconf_model::instance_id::decode_instances;
 use coreconf_model::{CoreconfError, Instance, InstancePath, Result};
 use serde_json::Value;
 
+use std::collections::{HashMap, HashSet};
+
 use crate::coap_types::{ContentFormat, Interface, Method, Request, Response, ResponseCode};
 use crate::datastore::Datastore;
 use crate::operations::{OperationBinding, OperationRegistry};
 use crate::path::PredicatePath;
+
+/// A registered CoAP observer identified by its token.
+#[derive(Debug, Clone)]
+pub struct Observer {
+    pub token: Vec<u8>,
+    /// Resource paths (or SID strings) this observer is watching.
+    pub resources: HashSet<String>,
+}
 
 pub struct RequestHandler {
     datastore: Datastore,
     operations: OperationRegistry,
     /// Observe sequence counter (incremented on each notification).
     observe_sequence: u32,
+    /// Registered observers keyed by token.
+    observers: HashMap<Vec<u8>, Observer>,
+    /// Resources that have changed since last notification.
+    dirty_resources: HashSet<String>,
 }
 
 impl RequestHandler {
@@ -20,6 +34,8 @@ impl RequestHandler {
             datastore,
             operations: OperationRegistry::default(),
             observe_sequence: 0,
+            observers: HashMap::new(),
+            dirty_resources: HashSet::new(),
         }
     }
 
@@ -28,6 +44,8 @@ impl RequestHandler {
             datastore,
             operations,
             observe_sequence: 0,
+            observers: HashMap::new(),
+            dirty_resources: HashSet::new(),
         }
     }
 
@@ -41,6 +59,67 @@ impl RequestHandler {
 
     pub fn datastore_mut(&mut self) -> &mut Datastore {
         &mut self.datastore
+    }
+
+    /// Register an observer (token → observed resources).
+    ///
+    /// Called automatically on FETCH+Observe.  The `resources` set
+    /// identifies which data paths the observer cares about.
+    pub fn register_observer(&mut self, token: Vec<u8>, resources: HashSet<String>) {
+        self.observers
+            .entry(token.clone())
+            .and_modify(|obs| obs.resources.extend(resources.iter().cloned()))
+            .or_insert(Observer { token, resources });
+    }
+
+    /// Remove an observer by token (e.g. on Observe=1 or connection close).
+    pub fn deregister_observer(&mut self, token: &[u8]) {
+        self.observers.remove(token);
+    }
+
+    /// Mark a resource path as changed, so registered observers will be
+    /// notified on the next poll.
+    pub fn mark_changed(&mut self, resource: &str) {
+        self.dirty_resources.insert(resource.to_string());
+    }
+
+    /// Collect pending notifications for a given observer token.
+    ///
+    /// Returns a list of (resource, sequence) pairs that need to be sent.
+    /// The caller (CoAP transport) is responsible for encoding and sending
+    /// the actual response packets.
+    pub fn pending_notifications(&mut self, token: &[u8]) -> Vec<(String, u32)> {
+        let Some(observer) = self.observers.get(token) else {
+            return Vec::new();
+        };
+
+        let mut notifications = Vec::new();
+        let dirty: Vec<String> = self
+            .dirty_resources
+            .iter()
+            .filter(|r| observer.resources.contains(*r))
+            .cloned()
+            .collect();
+
+        for resource in &dirty {
+            let seq = self.observe_sequence;
+            self.observe_sequence = self.observe_sequence.wrapping_add(1);
+            notifications.push((resource.clone(), seq));
+        }
+
+        // Clear only the resources THIS observer was notified about.
+        for resource in &dirty {
+            // Only clear if no other observer is watching this resource.
+            let still_watched = self
+                .observers
+                .values()
+                .any(|obs| obs.token != token && obs.resources.contains(resource));
+            if !still_watched {
+                self.dirty_resources.remove(resource);
+            }
+        }
+
+        notifications
     }
 
     pub fn handle(&mut self, request: &Request) -> Response {
@@ -70,12 +149,28 @@ impl RequestHandler {
 
         let mut response = self.handle_fetch(request);
 
-        // If the client registered for observe, stamp the response with
-        // the current sequence number.
-        if request.observe == Some(0) && response.code.is_success() {
-            let seq = self.observe_sequence;
-            self.observe_sequence = self.observe_sequence.wrapping_add(1);
-            response.observe = Some(seq);
+        // Register for observe if the client requested it (Observe=0).
+        // Deregister on Observe=1 (client wants to stop).
+        if let Some(observe_val) = request.observe {
+            let token = b"\xc0".to_vec(); // default token from coap-lite
+            if observe_val == 0 {
+                // Register: extract which SIDs/resources are being watched.
+                if let Ok(identifiers) = self.parse_fetch_request(&request.payload) {
+                    let resources: HashSet<String> = identifiers
+                        .into_iter()
+                        .map(|(sid, _keys)| sid.to_string())
+                        .collect();
+                    self.register_observer(token, resources);
+                }
+            } else if observe_val == 1 {
+                self.deregister_observer(&token);
+            }
+
+            if response.code.is_success() {
+                let seq = self.observe_sequence;
+                self.observe_sequence = self.observe_sequence.wrapping_add(1);
+                response.observe = Some(seq);
+            }
         }
 
         response
@@ -129,12 +224,28 @@ impl RequestHandler {
         }
 
         match self.parse_fetch_request(&request.payload) {
-            Ok(sids) => {
-                let mut instances = Vec::with_capacity(sids.len());
-                for sid in sids {
-                    if let Some(identifier) = self.datastore.model().get_identifier(sid)
-                        && let Ok(Some(value)) = self.datastore.get_path(identifier)
-                    {
+            Ok(identifiers) => {
+                let mut instances = Vec::with_capacity(identifiers.len());
+                for (sid, key_values) in identifiers {
+                    let value = if key_values.is_empty() {
+                        let identifier = self
+                            .datastore
+                            .model()
+                            .get_identifier(sid)
+                            .ok_or(CoreconfError::IdentifierNotFound(sid));
+                        match identifier {
+                            Ok(id) => self.datastore.get_path(id).ok().flatten(),
+                            Err(_) => None,
+                        }
+                    } else {
+                        // Build predicate path from instance ID with keys.
+                        match self.datastore.create_xpath(sid, &key_values) {
+                            Ok(xpath) => self.datastore.get_path(&xpath).ok().flatten(),
+                            Err(_) => None,
+                        }
+                    };
+
+                    if let Some(value) = value {
                         let mut path = InstancePath::new();
                         path.push_delta(sid);
                         instances.push(Instance::new(path, value));
@@ -164,7 +275,10 @@ impl RequestHandler {
             return match decode_json_value(&request.payload)
                 .and_then(|value| self.datastore.set_path(&request.path, value))
             {
-                Ok(()) => Response::changed(),
+                Ok(()) => {
+                    self.mark_changed(&request.path);
+                    Response::changed()
+                }
                 Err(error) => Response::error(ResponseCode::Conflict, &error.to_string()),
             };
         }
@@ -199,6 +313,7 @@ impl RequestHandler {
                     if let Err(error) = result {
                         return Response::error(ResponseCode::Conflict, &error.to_string());
                     }
+                    self.mark_changed(&identifier);
                 }
                 Response::changed()
             }
@@ -281,26 +396,31 @@ impl RequestHandler {
             .invoke(&parsed.canonical_path, input.as_ref())
     }
 
-    fn parse_fetch_request(&self, payload: &[u8]) -> Result<Vec<i64>> {
-        let mut sids = Vec::new();
+    fn parse_fetch_request(&self, payload: &[u8]) -> Result<Vec<(i64, Vec<Value>)>> {
+        let mut identifiers = Vec::new();
         let mut cursor = std::io::Cursor::new(payload);
 
         while (cursor.position() as usize) < payload.len() {
             let value: Value = ciborium::from_reader(&mut cursor)
                 .map_err(|error| CoreconfError::CborDecode(error.to_string()))?;
 
-            sids.push(parse_fetch_identifier(&value)?);
+            identifiers.push(parse_fetch_identifier(&value)?);
         }
 
-        Ok(sids)
+        Ok(identifiers)
     }
 }
 
-fn parse_fetch_identifier(value: &Value) -> Result<i64> {
+/// Parse a FETCH identifier: `sid` (bare SID) or `[sid, key1, key2, ...]`
+/// (instance ID with list-key values).
+fn parse_fetch_identifier(value: &Value) -> Result<(i64, Vec<Value>)> {
     match value {
-        Value::Number(number) => number
-            .as_i64()
-            .ok_or_else(|| CoreconfError::TypeConversion("expected integer SID".into())),
+        Value::Number(number) => {
+            let sid = number
+                .as_i64()
+                .ok_or_else(|| CoreconfError::TypeConversion("expected integer SID".into()))?;
+            Ok((sid, Vec::new()))
+        }
         Value::Array(values) => parse_fetch_identifier_array(values),
         _ => Err(CoreconfError::TypeConversion(
             "invalid FETCH identifier format".into(),
@@ -308,34 +428,34 @@ fn parse_fetch_identifier(value: &Value) -> Result<i64> {
     }
 }
 
-fn parse_fetch_identifier_array(values: &[Value]) -> Result<i64> {
+fn parse_fetch_identifier_array(values: &[Value]) -> Result<(i64, Vec<Value>)> {
     if values.is_empty() {
         return Err(CoreconfError::TypeConversion(
             "invalid FETCH identifier format".into(),
         ));
     }
 
-    let mut absolute_sid = 0i64;
-    let mut index = 0usize;
+    // First element is always a SID delta.
+    let delta = values[0].as_i64().ok_or_else(|| {
+        CoreconfError::TypeConversion("expected SID delta in FETCH identifier".into())
+    })?;
+    let absolute_sid = delta;
 
-    while index < values.len() {
-        let delta = values[index].as_i64().ok_or_else(|| {
-            CoreconfError::TypeConversion("expected SID delta in FETCH identifier".into())
-        })?;
-        absolute_sid += delta;
-        index += 1;
+    // Subsequent elements are key values (even if they happen to be integers —
+    // identityref keys are encoded as integer SIDs in CBOR).
+    let key_values: Vec<Value> = values[1..]
+        .iter()
+        .filter(|v| is_supported_fetch_key_value(v))
+        .cloned()
+        .collect();
 
-        while index < values.len() && values[index].as_i64().is_none() {
-            if !is_supported_fetch_key_value(&values[index]) {
-                return Err(CoreconfError::TypeConversion(
-                    "unsupported key value in FETCH identifier".into(),
-                ));
-            }
-            index += 1;
-        }
+    if key_values.len() != values.len() - 1 {
+        return Err(CoreconfError::TypeConversion(
+            "unsupported key value in FETCH identifier".into(),
+        ));
     }
 
-    Ok(absolute_sid)
+    Ok((absolute_sid, key_values))
 }
 
 fn is_supported_fetch_key_value(value: &Value) -> bool {

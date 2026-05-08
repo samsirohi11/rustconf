@@ -10,9 +10,9 @@
 //! The same operations work identically with any other YANG SID file.
 
 use coreconf_model::{CompositeModel, CoreconfModel, SidFile};
-use coreconf_runtime::coap_types::{ContentFormat, Interface, Method, Request};
 use coreconf_runtime::Datastore;
 use coreconf_runtime::RequestHandler;
+use coreconf_runtime::coap_types::{ContentFormat, Interface, Method, Request};
 use serde_json::json;
 use std::sync::OnceLock;
 
@@ -159,10 +159,11 @@ fn from_cbor_handles_empty_response() {
     let empty_cbor = model.to_coreconf("{}").unwrap();
     let ds = Datastore::from_cbor(model, &empty_cbor).unwrap();
 
-    assert!(ds
-        .predicates("/coreconf-m2m:transducers/transducer")
-        .unwrap()
-        .is_empty());
+    assert!(
+        ds.predicates("/coreconf-m2m:transducers/transducer")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -560,6 +561,134 @@ fn full_bootstrap_fetch_cycle() {
     let obs_resp = handler.handle(&obs_req);
     assert!(obs_resp.code.is_success());
     assert_eq!(obs_resp.observe, Some(0));
+}
+
+// ---------------------------------------------------------------------------
+// Instance-ID FETCH with keyed-list navigation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fetch_with_instance_id_navigates_list_entry() {
+    let ds = bootstrapped_datastore();
+    let mut handler = RequestHandler::new(ds);
+
+    let xpath = "/coreconf-m2m:transducers/transducer[type='coreconf-m2m:solar-radiation'][id='0']/quantity/value";
+    let (target_sid, key_values) = handler.datastore().resolve_xpath(xpath).unwrap();
+
+    // Build CBOR array [target_sid, key1, key2] using ALL key values.
+    let mut arr = Vec::new();
+    arr.push(serde_json::Value::Number(target_sid.into()));
+    for kv in &key_values {
+        arr.push(kv.clone());
+    }
+    let arr_value = serde_json::Value::Array(arr);
+    let mut payload = Vec::new();
+    ciborium::into_writer(&arr_value, &mut payload).unwrap();
+
+    let req = Request::new(Method::Fetch).with_payload(payload, ContentFormat::YangIdentifiersCbor);
+    let resp = handler.handle(&req);
+    assert!(resp.code.is_success());
+    assert!(!resp.payload.is_empty(), "FETCH with keys returned empty");
+}
+
+#[test]
+fn from_cbor_instance_seq_reconstructs_datastore() {
+    let model = m2m_coreconf_model();
+
+    let transducer_list = json!({
+        "coreconf-m2m:transducers": {
+            "transducer": [{
+                "type": "coreconf-m2m:solar-radiation",
+                "id": "0",
+                "unit": "W/m2",
+                "precision": 1,
+            }]
+        }
+    });
+    let value_cbor = model
+        .to_coreconf(&serde_json::to_string(&transducer_list).unwrap())
+        .unwrap();
+
+    // Decode the CBOR value so we can embed it in the instance map.
+    let decoded_value: serde_json::Value = ciborium::from_reader(value_cbor.as_slice()).unwrap();
+
+    let root_sid = sid("/coreconf-m2m:transducers");
+    let instance_map = serde_json::json!({ root_sid.to_string(): decoded_value });
+
+    let mut seq = Vec::new();
+    ciborium::into_writer(&instance_map, &mut seq).unwrap();
+
+    let ds = Datastore::from_cbor_instance_seq(model, &seq).unwrap();
+
+    let preds = ds
+        .predicates("/coreconf-m2m:transducers/transducer")
+        .unwrap();
+    assert_eq!(preds.len(), 1);
+    assert!(preds[0].contains("solar-radiation"));
+}
+
+// ---------------------------------------------------------------------------
+// Observe lifecycle
+// ---------------------------------------------------------------------------
+
+#[test]
+fn observe_register_and_notify() {
+    let ds = bootstrapped_datastore();
+    let mut handler = RequestHandler::new(ds);
+
+    let token = b"\x01\x02\x03".to_vec();
+    let mut resources = std::collections::HashSet::new();
+    resources.insert(sid("/coreconf-m2m:transducers/transducer/quantity/value").to_string());
+
+    handler.register_observer(token.clone(), resources);
+
+    // Mark changed — should produce a notification.
+    handler.mark_changed(&sid("/coreconf-m2m:transducers/transducer/quantity/value").to_string());
+
+    let notifications = handler.pending_notifications(&token);
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].1, 0); // sequence starts at 0
+
+    // Second poll with no new changes — should be empty.
+    let notifications2 = handler.pending_notifications(&token);
+    assert!(notifications2.is_empty());
+}
+
+#[test]
+fn observe_deregister_stops_notifications() {
+    let ds = bootstrapped_datastore();
+    let mut handler = RequestHandler::new(ds);
+
+    let token = b"\xaa".to_vec();
+    let mut resources = std::collections::HashSet::new();
+    resources.insert("100080".to_string());
+
+    handler.register_observer(token.clone(), resources);
+    handler.mark_changed("100080");
+
+    // Deregister.
+    handler.deregister_observer(&token);
+
+    let notifications = handler.pending_notifications(&token);
+    assert!(notifications.is_empty());
+}
+
+#[test]
+fn observe_multiple_resources() {
+    let ds = bootstrapped_datastore();
+    let mut handler = RequestHandler::new(ds);
+
+    let token = b"\xbb".to_vec();
+    let mut resources = std::collections::HashSet::new();
+    resources.insert("sid_a".to_string());
+    resources.insert("sid_b".to_string());
+
+    handler.register_observer(token.clone(), resources);
+    handler.mark_changed("sid_a");
+    handler.mark_changed("sid_b");
+
+    let notifications = handler.pending_notifications(&token);
+    assert_eq!(notifications.len(), 2);
 }
 
 // ---------------------------------------------------------------------------

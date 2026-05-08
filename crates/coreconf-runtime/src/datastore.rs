@@ -48,6 +48,76 @@ impl Datastore {
         Ok(Self::with_data(model, value))
     }
 
+    /// Build a datastore from a yang-instances+cbor-seq payload (the response
+    /// to a FETCH with Accept: 142).  Each instance's SID is resolved to an
+    /// identifier path, and the value is set at that path.
+    ///
+    /// Instance IDs with list-key values navigate into keyed list entries.
+    pub fn from_cbor_instance_seq(model: CoreconfModel, cbor: &[u8]) -> Result<Self> {
+        let composite = model.composite_model().clone();
+        let mut ds = Datastore::new_in_memory(composite);
+        ds.apply_instance_seq(cbor)?;
+        Ok(ds)
+    }
+
+    /// Apply a yang-instances+cbor-seq payload to an existing datastore.
+    ///
+    /// Each instance in the payload is decoded and its value is set at the
+    /// resolved predicate path.  Instance IDs with key values navigate into
+    /// keyed list entries.
+    pub fn apply_instance_seq(&mut self, cbor: &[u8]) -> Result<()> {
+        for instance in decode_instances(cbor)? {
+            let Some(sid) = instance.path.absolute_sid() else {
+                continue;
+            };
+
+            let key_values: Vec<Value> = instance
+                .path
+                .components
+                .iter()
+                .filter_map(|c| match c {
+                    coreconf_model::instance_id::PathComponent::KeyValue(v) => Some(v.clone()),
+                    _ => None,
+                })
+                .collect();
+
+            if key_values.is_empty() {
+                let identifier = self
+                    .model
+                    .get_identifier(sid)
+                    .ok_or(CoreconfError::IdentifierNotFound(sid))?
+                    .to_string();
+                if let Some(value) = instance.value {
+                    // Instance values from FETCH responses are in CORECONF
+                    // (SID-keyed) format.  Convert to identifier keys, then
+                    // unwrap the top-level container key so set_path doesn't
+                    // double-nest it.
+                    let id_value = self
+                        .model
+                        .sid_value_to_identifier_value_preserve_sids(value)?;
+                    let leaf = identifier.rsplit('/').next().unwrap_or(&identifier);
+                    let unwrapped = id_value.get(leaf).cloned().unwrap_or(id_value);
+                    self.set_path(&identifier, unwrapped)?;
+                } else {
+                    self.delete_path(&identifier)?;
+                }
+            } else {
+                let xpath = self.create_xpath(sid, &key_values)?;
+                if let Some(value) = instance.value {
+                    // For leaf values inside keyed lists, the value is
+                    // typically a scalar or small map — no unwrapping needed.
+                    let id_value = self
+                        .model
+                        .sid_value_to_identifier_value_preserve_sids(value)?;
+                    self.set_path(&xpath, id_value)?;
+                } else {
+                    self.delete_path(&xpath)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Replace the entire datastore tree with a decoded CBOR payload.
     ///
     /// This is used for observe notifications where each response carries
@@ -374,7 +444,9 @@ impl Datastore {
 
     /// Convert a target SID and optional key values back to an XPath string.
     ///
-    /// This is the inverse of `resolve_xpath`.
+    /// This is the inverse of `resolve_xpath`.  The returned path preserves
+    /// the module prefix on the first segment so it can be used directly with
+    /// `get_path` and `set_path`.
     pub fn create_xpath(&self, sid: i64, keys: &[Value]) -> Result<String> {
         let identifier = self
             .model
@@ -391,8 +463,15 @@ impl Datastore {
         let mut current_path = String::new();
         let mut key_index = 0usize;
 
-        for segment in &segments {
-            let local_name = segment.split(':').next_back().unwrap_or(segment);
+        for (depth, segment) in segments.iter().enumerate() {
+            // Depth 0 keeps the module prefix (e.g. "coreconf-m2m:transducers"),
+            // deeper levels use just the leaf name since that's how the datastore
+            // stores keys.
+            let name = if depth == 0 {
+                *segment
+            } else {
+                segment.rsplit(':').next().unwrap_or(segment)
+            };
             current_path = if current_path.is_empty() {
                 format!("/{segment}")
             } else {
@@ -421,16 +500,16 @@ impl Datastore {
                     let key_name = segment_leaf(key_identifier);
 
                     let formatted = format_key_value(&self.model, key_identifier, key_value)?;
-                    predicates.push(format!("{key_name}='{formatted}'"));
+                    predicates.push(format!("[{key_name}='{formatted}']"));
                 }
 
                 if !predicates.is_empty() {
-                    xpath_parts.push(format!("{local_name}{}", predicates.concat()));
+                    xpath_parts.push(format!("{name}{}", predicates.concat()));
                 } else {
-                    xpath_parts.push(local_name.to_string());
+                    xpath_parts.push(name.to_string());
                 }
             } else {
-                xpath_parts.push(local_name.to_string());
+                xpath_parts.push(name.to_string());
             }
         }
 
