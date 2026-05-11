@@ -73,9 +73,10 @@ pub fn run(args: ShellArgs) -> Result<(), CliError> {
             continue;
         }
 
-        match dispatch_command(&mut session, line, backup_by_default)? {
-            ShellAction::Continue => {}
-            ShellAction::Quit => break,
+        match dispatch_command(&mut session, line, backup_by_default) {
+            Ok(ShellAction::Continue) => {}
+            Ok(ShellAction::Quit) => break,
+            Err(error) => eprintln!("error: {error}"),
         }
     }
 

@@ -54,32 +54,35 @@ pub fn run(args: LiveArgs) -> Result<(), CliError> {
         let mut parts = line.splitn(3, ' ');
         let command = parts.next().unwrap_or_default();
 
-        match command {
-            "quit" | "exit" | "q" => break,
+        let result = match command {
+            "quit" | "exit" | "q" => return Ok(()),
 
-            "get" => {
+            "get" => (|| -> Result<(), CliError> {
                 let path = required(parts.next(), "usage: get <path>")?;
                 match session.get(path)? {
                     Some(value) => println!("{}", serde_json::to_string_pretty(&value)?),
                     None => eprintln!("(not found)"),
                 }
-            }
+                Ok(())
+            })(),
 
-            "set" => {
+            "set" => (|| -> Result<(), CliError> {
                 let path = required(parts.next(), "usage: set <path> <json-value>")?;
                 let raw_value = required(parts.next(), "usage: set <path> <json-value>")?;
                 let value: serde_json::Value = serde_json::from_str(raw_value)?;
                 session.set(path, value)?;
                 eprintln!("staged");
-            }
+                Ok(())
+            })(),
 
-            "delete" => {
+            "delete" => (|| -> Result<(), CliError> {
                 let path = required(parts.next(), "usage: delete <path>")?;
                 session.delete(path)?;
                 eprintln!("staged");
-            }
+                Ok(())
+            })(),
 
-            "diff" => {
+            "diff" => (|| -> Result<(), CliError> {
                 let patch = session.pending_patch()?;
                 if patch.is_empty() {
                     eprintln!("(no staged changes)");
@@ -91,9 +94,10 @@ pub fn run(args: LiveArgs) -> Result<(), CliError> {
                         }
                     }
                 }
-            }
+                Ok(())
+            })(),
 
-            "push" => {
+            "push" => (|| -> Result<(), CliError> {
                 let pending = session.pending_patch()?;
                 if pending.is_empty() {
                     eprintln!("(no staged changes to push)");
@@ -101,14 +105,23 @@ pub fn run(args: LiveArgs) -> Result<(), CliError> {
                     session.push()?;
                     eprintln!("pushed {} change(s)", pending.len());
                 }
-            }
+                Ok(())
+            })(),
 
-            "reload" => {
+            "reload" => (|| -> Result<(), CliError> {
                 session.reload()?;
                 eprintln!("reloaded from server");
-            }
+                Ok(())
+            })(),
 
-            _ => eprintln!("unknown command: {command}"),
+            _ => {
+                eprintln!("unknown command: {command}");
+                Ok(())
+            }
+        };
+
+        if let Err(error) = result {
+            eprintln!("error: {error}");
         }
     }
 

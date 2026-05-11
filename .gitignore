@@ -4,3 +4,4 @@ cargo.lock
 .pi/
 CONTEXT.md
 docs/
+crates/coreconf-cli/.pi*
