@@ -10,11 +10,11 @@ CoAP and CBOR encoding.
 
 ## Workspace
 
-| Crate | Purpose |
-|---|---|
-| `coreconf-model` | SID file parsing, composite multi-module models, JSON↔CBOR codec, YANG types, instance identifiers |
+| Crate              | Purpose                                                                                                                                                |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `coreconf-model`   | SID file parsing, composite multi-module models, JSON↔CBOR codec, YANG types, instance identifiers                                                     |
 | `coreconf-runtime` | Predicate-path datastore editing, in-memory and file-backed backends, CORECONF request handling, CoAP transport, observer tracking, operation dispatch |
-| `coreconf-cli` | Operator CLI: batch convert, validation, file-backed shell, remote live sessions |
+| `coreconf-cli`     | Operator CLI: batch convert, validation, file-backed shell, remote live sessions                                                                       |
 
 ## Quick Start
 
@@ -22,8 +22,8 @@ CoAP and CBOR encoding.
 use coreconf_model::CoreconfModel;
 use coreconf_runtime::Datastore;
 
-// Load a YANG SID file (the weather-station model used in tests)
-let model = CoreconfModel::new("tests/fixtures/coreconf-m2m@2026-03-29.sid")?;
+// Load the weather-station YANG SID file (see tutorial/ for demo data)
+let model = CoreconfModel::new("tutorial/coreconf-m2m@2026-03-29.sid")?;
 
 let mut ds = Datastore::new_in_memory(model.composite_model().clone());
 
@@ -78,21 +78,21 @@ For a full walkthrough of every operation with real output, see [tutorial.md](tu
 
 ## CORECONF Operations
 
-| Operation  | CoAP Method | Description                                            |
-| ---------- | ----------- | ------------------------------------------------------ |
-| **GET**    | GET         | Retrieve entire datastore or a predicate path as CBOR  |
-| **FETCH**  | FETCH       | Selectively retrieve data nodes by SID or instance ID  |
-| **iPATCH** | iPATCH      | Modify data nodes (set SID-value or SID-null for delete) |
+| Operation  | CoAP Method | Description                                                 |
+| ---------- | ----------- | ----------------------------------------------------------- |
+| **GET**    | GET         | Retrieve entire datastore or a predicate path as CBOR       |
+| **FETCH**  | FETCH       | Selectively retrieve data nodes by SID or instance ID       |
+| **iPATCH** | iPATCH      | Modify data nodes (set SID-value or SID-null for delete)    |
 | **POST**   | POST        | Invoke YANG RPC or action via registered operation bindings |
 
 ### Interface routing
 
 CORECONF defines two CoAP interfaces:
 
-| Path | Purpose | Allowed methods |
-|---|---|---|
-| `/c` | Management — configuration and telemetry data | GET, FETCH, iPATCH, POST |
-| `/s` | Streaming — time-series and event notifications | FETCH + Observe |
+| Path | Purpose                                         | Allowed methods          |
+| ---- | ----------------------------------------------- | ------------------------ |
+| `/c` | Management — configuration and telemetry data   | GET, FETCH, iPATCH, POST |
+| `/s` | Streaming — time-series and event notifications | FETCH + Observe          |
 
 ### CoAP Observe
 
@@ -126,7 +126,7 @@ The parser accepts both raw and RFC 9595 envelope formats:
 {"ietf-sid-file:sid-file": {"module-name": "example", …}}
 ```
 
-SID values may be integers or strings.  The `items` alias for `item` is also accepted.
+SID values may be integers or strings. The `items` alias for `item` is also accepted.
 
 ## Architecture
 

@@ -2,8 +2,8 @@ use clap::Args;
 use coreconf_runtime::transport::coap_lite::CoapLiteClient;
 use std::io::{self, BufRead, Write};
 
-use crate::CliError;
 use crate::session::LiveSession;
+use crate::CliError;
 
 /// Start an interactive live CORECONF session against a remote CoAP server.
 #[derive(Args)]

@@ -1,0 +1,27 @@
+{
+  "coreconf-m2m:transducers": {
+    "transducer": [
+      {
+        "type": "coreconf-m2m:solar-radiation",
+        "id": "0",
+        "unit": "W/m2",
+        "precision": 1,
+        "quantity": {
+          "value": 8500,
+          "timestamp": 1700000000,
+          "timestamp-source": 0
+        }
+      },
+      {
+        "type": "coreconf-m2m:air-temperature",
+        "id": "0",
+        "unit": "degC",
+        "precision": 2,
+        "quantity": {
+          "value": 2350,
+          "timestamp": 1700000000
+        }
+      }
+    ]
+  }
+}

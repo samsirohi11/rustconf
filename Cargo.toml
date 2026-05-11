@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "crates/coreconf-model",
-    "crates/coreconf-runtime",
-    "crates/coreconf-cli",
+  "crates/coreconf-model",
+  "crates/coreconf-runtime",
+  "crates/coreconf-cli",
 ]
 resolver = "2"
