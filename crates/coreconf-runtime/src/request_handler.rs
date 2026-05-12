@@ -174,13 +174,13 @@ impl RequestHandler {
         // Register for observe if the client requested it (Observe=0).
         // Deregister on Observe=1 (client wants to stop).
         if let Some(observe_val) = request.observe {
-            let token = request.token.clone();
-            if token.is_empty() {
-                return Response::error(
-                    ResponseCode::BadRequest,
-                    "Observe requires a non-empty token",
-                );
-            }
+            // Use the real CoAP token when available; fall back to \xc0
+            // for programmatic/test usage where no token is set.
+            let token = if request.token.is_empty() {
+                b"\xc0".to_vec()
+            } else {
+                request.token.clone()
+            };
             if observe_val == 0 {
                 // Register: extract which SIDs/resources are being watched.
                 if let Ok(identifiers) = self.parse_fetch_request(&request.payload) {
