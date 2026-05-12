@@ -1,12 +1,12 @@
 use clap::Args;
 use coreconf_runtime::transport::coap_lite::CoapLiteClient;
-use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use rustyline::error::ReadlineError;
 
+use crate::CliError;
 use crate::commands::shell::changes_to_text;
 use crate::complete::CoreconfCompleter;
 use crate::session::LiveSession;
-use crate::CliError;
 
 /// Start an interactive live CORECONF session against a remote CoAP server.
 #[derive(Args)]

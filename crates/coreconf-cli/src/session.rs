@@ -1,7 +1,7 @@
 use coreconf_model::{CompositeModel, CoreconfError};
 use coreconf_runtime::transport::coap_lite::CoreconfClient;
 use coreconf_runtime::{
-    encode_editable_value, read_editable_file, Backend, Datastore, EditableFormat, FileBackend,
+    Backend, Datastore, EditableFormat, FileBackend, encode_editable_value, read_editable_file,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
