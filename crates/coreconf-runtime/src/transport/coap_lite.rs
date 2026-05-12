@@ -233,6 +233,12 @@ impl CoapLiteServer {
     /// Handle a packet from a known peer.  Associates the peer with any
     /// observer registration so unsolicited notifications can be sent back.
     pub fn handle_packet(&mut self, packet: &Packet, peer: SocketAddr) -> Packet {
+        // ── /.well-known/core resource discovery ──────────────────────
+        let uri = uri_path(packet);
+        if uri.trim_start_matches('/') == ".well-known/core" {
+            return self.well_known_core_response(packet);
+        }
+
         let request = packet_to_request(packet, &self.resource_path);
         let response = match request {
             Ok(ref req) => {
@@ -249,6 +255,18 @@ impl CoapLiteServer {
             Err(response) => response,
         };
         response_to_packet(packet, response)
+    }
+
+    /// Build a CoRE Link Format response for `/.well-known/core`.
+    fn well_known_core_response(&self, request: &Packet) -> Packet {
+        let links = "</c>;rt=\"core.c.ds\";ct=112,</s>;rt=\"core.c.ev\";ct=141;obs".to_string();
+        let mut packet = Packet::new();
+        packet.header.message_id = request.header.message_id;
+        packet.set_token(request.get_token().to_vec());
+        packet.header.code = MessageClass::Response(ResponseType::Content);
+        packet.payload = links.into_bytes();
+        packet.set_content_format(CoapContentFormat::TextPlain);
+        packet
     }
 
     /// Send pending notifications to all registered observers.
