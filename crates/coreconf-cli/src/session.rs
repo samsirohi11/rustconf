@@ -1,7 +1,7 @@
 use coreconf_model::{CompositeModel, CoreconfError};
 use coreconf_runtime::transport::coap_lite::CoreconfClient;
 use coreconf_runtime::{
-    Backend, Datastore, EditableFormat, FileBackend, encode_editable_value, read_editable_file,
+    encode_editable_value, read_editable_file, Backend, Datastore, EditableFormat, FileBackend,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -60,6 +60,10 @@ impl FileSession {
 
     pub fn path(&self) -> &Path {
         self.backend.path()
+    }
+
+    pub fn model(&self) -> &CompositeModel {
+        &self.model
     }
 
     pub fn format(&self) -> EditableFormat {
@@ -294,7 +298,6 @@ pub fn diff_trees(
     patch.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(patch)
 }
-
 fn diff_value(
     path: String,
     before: &Value,

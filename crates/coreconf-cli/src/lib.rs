@@ -4,6 +4,7 @@
 //! for working with CORECONF/YANG SID artifacts and datastores.
 
 pub mod commands;
+pub mod complete;
 pub mod session;
 
 use coreconf_model::{CompositeModel, CoreconfError, SidFile};

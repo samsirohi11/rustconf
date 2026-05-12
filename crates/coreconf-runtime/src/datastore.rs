@@ -599,7 +599,7 @@ fn get_at_path(
         };
         let entry = list
             .iter()
-            .find(|value| list_entry_matches(value, &key_values))
+            .find(|value| list_entry_matches(value, &key_values, model, &next_path))
             .cloned();
         match entry {
             Some(entry) => get_at_path(
@@ -671,7 +671,7 @@ fn set_at_path(
             .entry(storage_key(segment, depth))
             .or_insert_with(|| Value::Array(Vec::new()));
         let entries = ensure_array(list)?;
-        let entry = find_or_create_list_entry(entries, &key_values);
+        let entry = find_or_create_list_entry(entries, &key_values, ctx.model, &next_path);
 
         if depth == ctx.segments.len() - 1 {
             let mut next_value = value;
@@ -739,7 +739,7 @@ fn delete_at_path(
 
         let position = list
             .iter()
-            .position(|entry| list_entry_matches(entry, &key_values));
+            .position(|entry| list_entry_matches(entry, &key_values, model, &next_path));
 
         let Some(position) = position else {
             return Ok(false);
@@ -945,22 +945,105 @@ fn predicate_name_matches(expected_leaf: &str, identifier: &str, actual_name: &s
         || actual_name == segment_leaf(identifier)
 }
 
-fn list_entry_matches(entry: &Value, key_values: &[(String, Value)]) -> bool {
+/// Compare a list entry against key values, handling identityref flexibly.
+///
+/// Matches pycoreconf's `_walk` entry comparison: identityref values may be
+/// stored as string names (e.g. `"coreconf-m2m:solar-radiation"`) while
+/// predicate values are coerced to SID numbers.  This function resolves both
+/// representations to the same type before comparing.
+fn list_entry_matches(
+    entry: &Value,
+    key_values: &[(String, Value)],
+    model: &CompositeModel,
+    list_identifier: &str,
+) -> bool {
     let Some(map) = entry.as_object() else {
         return false;
     };
-    key_values
-        .iter()
-        .all(|(name, value)| map.get(name).is_some_and(|existing| existing == value))
+    key_values.iter().all(|(name, value)| {
+        let stored = map.get(name);
+        let is_match = stored.is_some_and(|stored| stored == value);
+        if is_match {
+            return true;
+        }
+        // Flexible identityref comparison: pycoreconf stores identityref as SID integers
+        // and compares them directly.  In coreconf the internal tree uses string names from
+        // decode_cbor_to_json, so stored values may differ in representation from predicate
+        // values.  Resolve both to SIDs before comparing.
+        let Some(stored) = stored else {
+            return false;
+        };
+        identityref_equal(model, list_identifier, name, stored, value)
+    })
+}
+
+/// Compare two identityref values that may differ in representation.
+///
+/// - Predicate values are always SID numbers (coerced by `coerce_predicate_value`).
+/// - Stored values are typically string names (from `decode_cbor_to_json`).
+///
+/// Resolves string names to SIDs before comparing, mirroring pycoreconf's
+/// `_resolve_identity_to_sid` which converts predicate names to SIDs at parse time
+/// while the stored representation is already a SID integer.
+fn identityref_equal(
+    model: &CompositeModel,
+    list_identifier: &str,
+    key_name: &str,
+    stored: &Value,
+    predicate: &Value,
+) -> bool {
+    // Determine the full YANG identifier for this key leaf.
+    let key_identifier = format!("{list_identifier}/{key_name}");
+
+    // Only apply flexible comparison when the key leaf is identityref-typed.
+    if !matches!(model.get_type(&key_identifier), Some(YangType::Identityref)) {
+        return false;
+    }
+
+    // Normalise both values to an i64 SID.
+    let stored_sid = value_to_identityref_sid(stored, model);
+    let predicate_sid = value_to_identityref_sid(predicate, model);
+
+    stored_sid.is_some_and(|s| predicate_sid.is_some_and(|p| s == p))
+}
+
+/// Convert a `serde_json::Value` to an identityref SID, accepting both
+/// numeric SIDs and string identity names (matching pycoreconf's
+/// `_resolve_identity_to_sid`).
+fn value_to_identityref_sid(value: &Value, model: &CompositeModel) -> Option<i64> {
+    match value {
+        Value::Number(n) => n.as_i64(),
+        Value::String(s) => {
+            // Exact match (e.g. "coreconf-m2m:solar-radiation").
+            if let Some(sid) = model.get_sid(s) {
+                return Some(sid);
+            }
+            // With leading slash (e.g. "/coreconf-m2m:solar-radiation").
+            let prefixed = if s.starts_with('/') {
+                s.clone()
+            } else {
+                format!("/{s}")
+            };
+            if let Some(sid) = model.get_sid(&prefixed) {
+                return Some(sid);
+            }
+            // Unqualified name (e.g. "solar-radiation") — resolve only when
+            // unambiguous across loaded modules.
+            resolve_unqualified_identity(model, s)
+        }
+        _ => None,
+    }
 }
 
 fn find_or_create_list_entry<'a>(
     entries: &'a mut Vec<Value>,
     key_values: &[(String, Value)],
+    model: &CompositeModel,
+    list_identifier: &str,
 ) -> &'a mut Value {
     if let Some(position) = entries
         .iter()
-        .position(|entry| list_entry_matches(entry, key_values))
+        .position(|entry| list_entry_matches(entry, key_values, model, list_identifier))
     {
         return &mut entries[position];
     }
@@ -1039,9 +1122,20 @@ fn format_predicate_string(
 fn format_key_value(model: &CompositeModel, identifier: &str, value: &Value) -> Result<String> {
     match model.get_type(identifier) {
         Some(YangType::Identityref) => {
-            // Convert numeric SID back to identity name.
-            let sid = value.as_i64().ok_or_else(|| {
-                CoreconfError::TypeConversion("expected integer SID for identityref".into())
+            // Accept both numeric SIDs (set_path-created entries) and
+            // string identity names (CBOR-decoded data).
+            let sid = match value {
+                Value::Number(n) => n.as_i64(),
+                Value::String(s) => model
+                    .get_sid(s)
+                    .or_else(|| model.get_sid(&format!("/{s}")))
+                    .or_else(|| resolve_unqualified_identity(model, s)),
+                _ => None,
+            }
+            .ok_or_else(|| {
+                CoreconfError::TypeConversion(format!(
+                    "expected integer SID or identity name for identityref, got {value}"
+                ))
             })?;
             let identity = model
                 .get_identifier(sid)

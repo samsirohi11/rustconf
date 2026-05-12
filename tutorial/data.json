@@ -3,23 +3,230 @@
     "transducer": [
       {
         "type": "coreconf-m2m:solar-radiation",
-        "id": "0",
+        "id": 0,
         "unit": "W/m2",
-        "precision": 1,
+        "precision": 0,
         "quantity": {
-          "value": 8500,
+          "value": 10476,
           "timestamp": 1700000000,
-          "timestamp-source": 0
+          "timestamp-source": 0,
+          "statistics": {
+            "min": 10475,
+            "max": 10523,
+            "mean": 10479,
+            "median": 10484,
+            "stdev": 28,
+            "sample-count": 2386
+          }
+        }
+      },
+      {
+        "type": "coreconf-m2m:precipitation",
+        "id": 0,
+        "unit": "mm",
+        "precision": 0,
+        "quantity": {
+          "value": 377,
+          "timestamp": 1700000000,
+          "timestamp-source": 0,
+          "statistics": {
+            "min": 334,
+            "max": 424,
+            "mean": 363,
+            "median": 390,
+            "stdev": 75,
+            "sample-count": 7012
+          }
         }
       },
       {
         "type": "coreconf-m2m:air-temperature",
-        "id": "0",
+        "id": 0,
         "unit": "degC",
+        "precision": 0,
+        "quantity": {
+          "value": -368,
+          "timestamp": 1700000000,
+          "timestamp-source": 0,
+          "statistics": {
+            "min": -373,
+            "max": -355,
+            "mean": -362,
+            "median": -369,
+            "stdev": 77,
+            "sample-count": 534
+          }
+        }
+      },
+      {
+        "type": "coreconf-m2m:relative-humidity",
+        "id": 0,
+        "unit": "%",
+        "precision": 0,
+        "quantity": {
+          "value": 574,
+          "timestamp": 1700000000,
+          "timestamp-source": 0,
+          "statistics": {
+            "min": 529,
+            "max": 615,
+            "mean": 560,
+            "median": 576,
+            "stdev": 28,
+            "sample-count": 7459
+          }
+        }
+      },
+      {
+        "type": "coreconf-m2m:barometric-pressure",
+        "id": 0,
+        "unit": "kPa",
+        "precision": 0,
+        "quantity": {
+          "value": 942,
+          "timestamp": 1700000000,
+          "timestamp-source": 0,
+          "statistics": {
+            "min": 894,
+            "max": 952,
+            "mean": 935,
+            "median": 947,
+            "stdev": 35,
+            "sample-count": 2647
+          }
+        }
+      },
+      {
+        "type": "coreconf-m2m:vapor-pressure",
+        "id": 0,
+        "unit": "kPa",
+        "precision": 1,
+        "quantity": {
+          "value": 13,
+          "timestamp": 1700000000,
+          "timestamp-source": 0,
+          "statistics": {
+            "min": 7,
+            "max": 18,
+            "mean": 9,
+            "median": 25,
+            "stdev": 45,
+            "sample-count": 5735
+          }
+        }
+      },
+      {
+        "type": "coreconf-m2m:wind-speed",
+        "id": 0,
+        "unit": "m/s",
+        "precision": 1,
+        "quantity": {
+          "value": 154,
+          "timestamp": 1700000000,
+          "timestamp-source": 0,
+          "statistics": {
+            "min": 152,
+            "max": 200,
+            "mean": 145,
+            "median": 152,
+            "stdev": 15,
+            "sample-count": 6301
+          }
+        }
+      },
+      {
+        "type": "coreconf-m2m:wind-direction",
+        "id": 0,
+        "unit": "deg",
         "precision": 2,
         "quantity": {
-          "value": 2350,
-          "timestamp": 1700000000
+          "value": 322,
+          "timestamp": 1700000000,
+          "timestamp-source": 0,
+          "statistics": {
+            "min": 304,
+            "max": 362,
+            "mean": 303,
+            "median": 309,
+            "stdev": 46,
+            "sample-count": 9559
+          }
+        }
+      },
+      {
+        "type": "coreconf-m2m:wind-gust",
+        "id": 0,
+        "unit": "m/s",
+        "precision": 2,
+        "quantity": {
+          "value": 98,
+          "timestamp": 1700000000,
+          "timestamp-source": 0,
+          "statistics": {
+            "min": 94,
+            "max": 100,
+            "mean": 104,
+            "median": 89,
+            "stdev": 37,
+            "sample-count": 1407
+          }
+        }
+      },
+      {
+        "type": "coreconf-m2m:strike-count",
+        "id": 0,
+        "unit": "count",
+        "precision": 0,
+        "quantity": {
+          "value": 29,
+          "timestamp": 1700000000,
+          "timestamp-source": 0,
+          "statistics": {
+            "min": 5,
+            "max": 46,
+            "mean": 20,
+            "median": 24,
+            "stdev": 46,
+            "sample-count": 2764
+          }
+        }
+      },
+      {
+        "type": "coreconf-m2m:average-distance",
+        "id": 0,
+        "unit": "km",
+        "precision": 1,
+        "quantity": {
+          "value": 189,
+          "timestamp": 1700000000,
+          "timestamp-source": 0,
+          "statistics": {
+            "min": 176,
+            "max": 231,
+            "mean": 192,
+            "median": 182,
+            "stdev": 87,
+            "sample-count": 1269
+          }
+        }
+      },
+      {
+        "type": "coreconf-m2m:tilt",
+        "id": 0,
+        "unit": "deg",
+        "precision": 2,
+        "quantity": {
+          "value": 623,
+          "timestamp": 1700000000,
+          "timestamp-source": 0,
+          "statistics": {
+            "min": 613,
+            "max": 657,
+            "mean": 628,
+            "median": 633,
+            "stdev": 59,
+            "sample-count": 6316
+          }
         }
       }
     ]

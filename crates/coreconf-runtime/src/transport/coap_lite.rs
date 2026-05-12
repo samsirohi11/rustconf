@@ -1,6 +1,7 @@
 use std::net::{ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
+use coap_lite::block_handler::BlockValue;
 use coap_lite::{
     CoapOption, ContentFormat as CoapContentFormat, MessageClass, MessageType, Packet, RequestType,
     ResponseType,
@@ -12,6 +13,10 @@ use crate::coap_types::{
     ContentFormat, Interface, Method, QueryParams, Request, Response, ResponseCode,
 };
 use crate::request_handler::RequestHandler;
+
+/// Maximum payload bytes per CoAP block to stay safely under the
+/// 1152-byte default message size after adding headers and options.
+const MAX_BLOCK_PAYLOAD: usize = 1024;
 
 pub trait CoreconfClient {
     fn fetch_snapshot(&mut self) -> Result<Value>;
@@ -50,6 +55,56 @@ impl CoapLiteClient {
         &self.endpoint
     }
 
+    /// Send an iPATCH request split across multiple Block1 transfers (RFC 7959).
+    fn send_blockwise_ipatch(&mut self, path: &str, payload: &[u8]) -> Result<()> {
+        let blocks: Vec<&[u8]> = payload.chunks(MAX_BLOCK_PAYLOAD).collect();
+        let total = blocks.len();
+
+        for (i, chunk) in blocks.iter().enumerate() {
+            let more = i + 1 < total;
+            let block = BlockValue::new(i, more, MAX_BLOCK_PAYLOAD)
+                .map_err(|e| invalid_data(e.to_string()))?;
+
+            let response = self.send_coreconf_request_with_block(
+                RequestType::IPatch,
+                Some(path),
+                chunk.to_vec(),
+                Some(ContentFormat::YangDataCbor),
+                block,
+            )?;
+
+            if more {
+                if !matches!(
+                    response.header.code,
+                    MessageClass::Response(ResponseType::Continue)
+                ) {
+                    return Err(CoreconfError::ValidationError(format!(
+                        "Block1: expected Continue (2.31) for block {}/{}, got {:?}",
+                        i + 1,
+                        total,
+                        response.header.code
+                    )));
+                }
+            } else {
+                ensure_success(&response)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn send_coreconf_request_with_block(
+        &mut self,
+        method: RequestType,
+        path: Option<&str>,
+        payload: Vec<u8>,
+        content_format: Option<ContentFormat>,
+        block1: BlockValue,
+    ) -> Result<Packet> {
+        let mut packet = self.build_packet(method, path, payload, content_format);
+        packet.add_option_as(CoapOption::Block1, block1);
+        self.send_packet(packet)
+    }
+
     fn send_coreconf_request(
         &mut self,
         method: RequestType,
@@ -57,6 +112,17 @@ impl CoapLiteClient {
         payload: Vec<u8>,
         content_format: Option<ContentFormat>,
     ) -> Result<Packet> {
+        let packet = self.build_packet(method, path, payload, content_format);
+        self.send_packet(packet)
+    }
+
+    fn build_packet(
+        &mut self,
+        method: RequestType,
+        path: Option<&str>,
+        payload: Vec<u8>,
+        content_format: Option<ContentFormat>,
+    ) -> Packet {
         let mut packet = Packet::new();
         packet.header.message_id = self.next_message_id;
         self.next_message_id = self.next_message_id.wrapping_add(1);
@@ -74,7 +140,10 @@ impl CoapLiteClient {
                 packet.set_content_format(content_format_to_coap(format));
             }
         }
+        packet
+    }
 
+    fn send_packet(&mut self, packet: Packet) -> Result<Packet> {
         let bytes = packet
             .to_bytes()
             .map_err(|error| invalid_data(error.to_string()))?;
@@ -105,13 +174,18 @@ impl CoreconfClient for CoapLiteClient {
             let mut payload = Vec::new();
             ciborium::into_writer(value, &mut payload)
                 .map_err(|error| CoreconfError::CborEncode(error.to_string()))?;
-            let response = self.send_coreconf_request(
-                RequestType::IPatch,
-                Some(path),
-                payload,
-                Some(ContentFormat::YangDataCbor),
-            )?;
-            ensure_success(&response)?;
+
+            if payload.len() <= MAX_BLOCK_PAYLOAD {
+                let response = self.send_coreconf_request(
+                    RequestType::IPatch,
+                    Some(path),
+                    payload,
+                    Some(ContentFormat::YangDataCbor),
+                )?;
+                ensure_success(&response)?;
+            } else {
+                self.send_blockwise_ipatch(path, &payload)?;
+            }
         }
         Ok(())
     }
@@ -227,9 +301,13 @@ pub fn packet_to_request(
         format!("/{path}")
     });
     request.payload = packet.payload.clone();
-    request.content_format = packet
-        .get_content_format()
-        .and_then(|format| content_format_from_coap(method, format))
+    request.content_format = raw_content_format(packet)
+        .and_then(|raw| content_format_from_raw(method, raw))
+        .or_else(|| {
+            packet
+                .get_content_format()
+                .and_then(|format| content_format_from_coap(method, format))
+        })
         .or_else(|| default_content_format(method, &request.payload));
     request.query = uri_query(packet);
 
@@ -310,11 +388,46 @@ fn default_content_format(method: Method, payload: &[u8]) -> Option<ContentForma
     }
 }
 
+/// Extract the raw content-format option value from a CoAP packet.
+///
+/// Reads the option bytes directly, avoiding the coap-lite `ContentFormat`
+/// enum which lacks RFC-defined CORECONF formats (141, 142, 143).
+fn raw_content_format(packet: &Packet) -> Option<u16> {
+    let raw = packet.get_option(CoapOption::ContentFormat)?;
+    let bytes = raw.front()?;
+    if bytes.len() == 1 {
+        Some(u16::from(bytes[0]))
+    } else if bytes.len() >= 2 {
+        Some(u16::from_be_bytes([bytes[0], bytes[1]]))
+    } else {
+        None
+    }
+}
+
+/// Map a raw content-format number (RFC 9595 / IANA registry) to a `ContentFormat`.
+///
+/// Handles both the RFC-defined CORECONF formats used by aiocoap and the
+/// coap-lite generic formats.  Prioritises raw numbers over the enum so that
+/// clients sending RFC-compliant format numbers (e.g. 141 for
+/// yang-identifiers+cbor) are recognised correctly.
+fn content_format_from_raw(method: Method, raw: u16) -> Option<ContentFormat> {
+    match (method, raw) {
+        // RFC 9595 CORECONF content-formats
+        (Method::Fetch, 141) => Some(ContentFormat::YangIdentifiersCbor),
+        (_, 141) => Some(ContentFormat::YangDataCbor),
+        (_, 142) | (_, 140) => Some(ContentFormat::YangDataCbor),
+        (_, 143) | (_, 63) | (_, 271) => Some(ContentFormat::YangInstancesCborSeq),
+        _ => None,
+    }
+}
+
 fn content_format_to_coap(format: ContentFormat) -> CoapContentFormat {
+    // Use RFC 9595 format numbers when available; fall back to coap-lite
+    // generics for broader compatibility.
     match format {
-        ContentFormat::YangDataCbor => CoapContentFormat::ApplicationYangDataCbor,
-        ContentFormat::YangIdentifiersCbor => CoapContentFormat::ApplicationCBOR,
-        ContentFormat::YangInstancesCborSeq => CoapContentFormat::ApplicationCborSeq,
+        ContentFormat::YangDataCbor => CoapContentFormat::ApplicationYangDataCbor, // 142
+        ContentFormat::YangIdentifiersCbor => CoapContentFormat::ApplicationCBOR, // 60 (no RFC-specific variant in coap-lite)
+        ContentFormat::YangInstancesCborSeq => CoapContentFormat::ApplicationCborSeq, // 63
     }
 }
 

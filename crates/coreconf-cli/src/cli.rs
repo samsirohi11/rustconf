@@ -1,12 +1,12 @@
 use clap::{Parser, Subcommand};
 
-use coreconf_cli::CliError;
 use coreconf_cli::commands;
+use coreconf_cli::CliError;
 
 #[derive(Parser)]
 #[command(
     name = "coreconf-cli",
-    about = "CORECONF operator CLI — batch conversion, validation, and interactive shell",
+    about = "CORECONF operator CLI — convert, validate, shell, live, and serve",
     version
 )]
 pub struct Cli {
@@ -27,6 +27,9 @@ pub enum Commands {
 
     /// Start an interactive live CORECONF session against a remote CoAP server
     Live(commands::live::LiveArgs),
+
+    /// Start a CORECONF CoAP server backed by a local datastore
+    Serve(commands::serve::ServeArgs),
 }
 
 pub fn run(cli: Cli) -> Result<(), CliError> {
@@ -35,5 +38,6 @@ pub fn run(cli: Cli) -> Result<(), CliError> {
         Commands::Validate(args) => commands::validate::run(args),
         Commands::Shell(args) => commands::shell::run(args),
         Commands::Live(args) => commands::live::run(args),
+        Commands::Serve(args) => commands::serve::run(args),
     }
 }

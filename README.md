@@ -14,7 +14,7 @@ CoAP and CBOR encoding.
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `coreconf-model`   | SID file parsing, composite multi-module models, JSON↔CBOR codec, YANG types, instance identifiers                                                     |
 | `coreconf-runtime` | Predicate-path datastore editing, in-memory and file-backed backends, CORECONF request handling, CoAP transport, observer tracking, operation dispatch |
-| `coreconf-cli`     | Operator CLI: batch convert, validation, file-backed shell, remote live sessions                                                                       |
+| `coreconf-cli`     | Operator CLI: batch convert, validation, file-backed shell, remote live sessions, CoAP server                                                          |
 
 ## Quick Start
 
@@ -72,6 +72,9 @@ coreconf-cli shell --sid model.sid --file config.json
 
 # Live remote session over CoAP
 coreconf-cli live --sid model.sid --server [::1]:5683
+
+# Start a CoAP server
+coreconf-cli serve --sid model.sid --data config.json --port 5683
 ```
 
 For a full walkthrough of every operation with real output, see [tutorial.md](tutorial.md).
@@ -105,11 +108,14 @@ and acknowledged; filtering is pass-through until multi-datastore support is add
 
 ## CoAP Transport
 
-A reference `coap-lite` adapter is included. Start a server:
+A reference `coap-lite` adapter is included. Start a server or connect to one:
 
 ```bash
-# From the repo root
-cargo run -p coreconf-cli -- live --sid crates/coreconf-runtime/tests/fixtures/coreconf-m2m@2026-03-29.sid --server [::1]:5683
+# Start a CoAP server
+cargo run -p coreconf-cli -- serve --sid tutorial/coreconf-m2m@2026-03-29.sid --data tutorial/data.json
+
+# Connect with live session from another terminal
+cargo run -p coreconf-cli -- live --sid tutorial/coreconf-m2m@2026-03-29.sid --server 127.0.0.1:5683
 ```
 
 Real devices bring their own CoAP stack and implement the `CoreconfClient` trait.
@@ -159,6 +165,7 @@ crates/
       validate.rs      # SID + data validation
       shell.rs         # File-backed interactive shell
       live.rs          # Remote live session over CoAP
+      serve.rs         # CoAP server
 ```
 
 ## Building and Testing
