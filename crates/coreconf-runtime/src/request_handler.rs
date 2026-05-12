@@ -78,9 +78,31 @@ impl RequestHandler {
     }
 
     /// Mark a resource path as changed, so registered observers will be
-    /// notified on the next poll.
-    pub fn mark_changed(&mut self, resource: &str) {
-        self.dirty_resources.insert(resource.to_string());
+    /// notified on the next poll.  Converts identifier paths to SID strings
+    /// so they match the SIDs observers registered via FETCH.
+    pub fn mark_changed(&mut self, path: &str) {
+        // Walk up the canonical path to find the shallowest known SID
+        // that registered observers will be watching.
+        if let Some(sid) = self.top_level_sid_for_path(path) {
+            self.dirty_resources.insert(sid.to_string());
+        } else {
+            self.dirty_resources.insert(path.to_string());
+        }
+    }
+
+    /// Walk up the canonical path segments to find the closest ancestor
+    /// with a known SID.  E.g. `/m:list[key]/leaf` → SID of `/m:list`.
+    fn top_level_sid_for_path(&self, path: &str) -> Option<i64> {
+        let parsed = PredicatePath::parse(path).ok()?;
+        let canonical = parsed.canonical_path.trim_start_matches('/');
+        let segments: Vec<&str> = canonical.split('/').filter(|s| !s.is_empty()).collect();
+        for end in (1..=segments.len()).rev() {
+            let candidate = format!("/{}", segments[..end].join("/"));
+            if let Some(sid) = self.datastore.model().get_sid(&candidate) {
+                return Some(sid);
+            }
+        }
+        None
     }
 
     /// Collect pending notifications for a given observer token.
@@ -152,7 +174,13 @@ impl RequestHandler {
         // Register for observe if the client requested it (Observe=0).
         // Deregister on Observe=1 (client wants to stop).
         if let Some(observe_val) = request.observe {
-            let token = b"\xc0".to_vec(); // default token from coap-lite
+            let token = request.token.clone();
+            if token.is_empty() {
+                return Response::error(
+                    ResponseCode::BadRequest,
+                    "Observe requires a non-empty token",
+                );
+            }
             if observe_val == 0 {
                 // Register: extract which SIDs/resources are being watched.
                 if let Ok(identifiers) = self.parse_fetch_request(&request.payload) {

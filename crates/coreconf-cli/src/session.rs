@@ -248,6 +248,23 @@ impl<C: CoreconfClient> LiveSession<C> {
         self.working_copy.get_path(path).map_err(CliError::Model)
     }
 
+    pub fn model(&self) -> &CompositeModel {
+        &self.model
+    }
+
+    pub fn staged_changes(&self) -> Result<Vec<StagedChange>, CliError> {
+        let tree = self.working_copy.get_all();
+        let patch = diff_trees(&self.base_snapshot, &tree).map_err(CliError::Model)?;
+        Ok(patch
+            .into_iter()
+            .map(|(path, after)| StagedChange {
+                before: value_at_path(&self.base_snapshot, &path).cloned(),
+                after,
+                path,
+            })
+            .collect())
+    }
+
     pub fn set(&mut self, path: &str, value: Value) -> Result<(), CliError> {
         self.working_copy
             .set_path(path, value)

@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
-use coreconf_cli::commands;
 use coreconf_cli::CliError;
+use coreconf_cli::commands;
 
 #[derive(Parser)]
 #[command(

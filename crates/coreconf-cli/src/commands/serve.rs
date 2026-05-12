@@ -136,7 +136,7 @@ pub fn run(args: ServeArgs) -> Result<(), CliError> {
         }
 
         // Handle the request
-        let response = server.handle_packet(&packet);
+        let response = server.handle_packet(&packet, peer);
 
         // Log response
         if args.verbose {
@@ -171,6 +171,9 @@ pub fn run(args: ServeArgs) -> Result<(), CliError> {
         if let Err(e) = socket.send_to(&bytes, peer) {
             let _ = writeln!(io::stderr(), "[error] send: {e}");
         }
+
+        // Push any pending observer notifications.
+        server.flush_pending_notifications();
     }
 
     // ── Save modified datastore ────────────────────────────────────────────

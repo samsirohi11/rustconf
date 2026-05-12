@@ -3,6 +3,7 @@ use coreconf_runtime::transport::coap_lite::CoapLiteClient;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
+use crate::commands::shell::changes_to_text;
 use crate::complete::CoreconfCompleter;
 use crate::session::LiveSession;
 use crate::CliError;
@@ -62,6 +63,21 @@ pub fn run(args: LiveArgs) -> Result<(), CliError> {
                 let command = parts.next().unwrap_or_default();
 
                 let result = match command {
+                    "help" | "?" => {
+                        eprintln!("Commands:");
+                        eprintln!(
+                            "  get <path>                 read a value from the remote server"
+                        );
+                        eprintln!("  set <path> <json-value>    stage a change");
+                        eprintln!("  delete <path>              stage a deletion");
+                        eprintln!("  diff                       show staged changes");
+                        eprintln!("  push                       send staged changes to server");
+                        eprintln!("  reload                     fetch fresh snapshot from server");
+                        eprintln!("  help | ?                   show this help");
+                        eprintln!("  quit | exit | q            disconnect");
+                        Ok(())
+                    }
+
                     "quit" | "exit" | "q" => return Ok(()),
 
                     "get" => (|| -> Result<(), CliError> {
@@ -92,19 +108,12 @@ pub fn run(args: LiveArgs) -> Result<(), CliError> {
                     })(),
 
                     "diff" => (|| -> Result<(), CliError> {
-                        let patch = session.pending_patch()?;
-                        if patch.is_empty() {
+                        let changes = session.staged_changes()?;
+                        if changes.is_empty() {
                             eprintln!("(no staged changes)");
                         } else {
-                            for (path, value) in &patch {
-                                match value {
-                                    Some(v) => println!(
-                                        "{} {path} {}",
-                                        style_live_yellow("M"),
-                                        style_live_yellow(&compact_json(v))
-                                    ),
-                                    None => println!("{} {path}", style_live_red("D")),
-                                }
+                            for line in changes_to_text(&changes, Some(session.model())) {
+                                println!("{line}");
                             }
                         }
                         Ok(())
@@ -153,16 +162,4 @@ pub fn run(args: LiveArgs) -> Result<(), CliError> {
 
 fn required<'a>(value: Option<&'a str>, message: &str) -> Result<&'a str, CliError> {
     value.ok_or_else(|| CliError::InvalidInput(message.to_string()))
-}
-
-fn style_live_red(text: &str) -> String {
-    format!("\x1b[31m{text}\x1b[0m")
-}
-
-fn style_live_yellow(text: &str) -> String {
-    format!("\x1b[33m{text}\x1b[0m")
-}
-
-fn compact_json(value: &serde_json::Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
 }

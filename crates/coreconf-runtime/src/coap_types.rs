@@ -199,6 +199,8 @@ pub struct Request {
     pub interface: Option<Interface>,
     /// CoAP Observe option: `Some(0)` = register, `Some(n)` = notification.
     pub observe: Option<u32>,
+    /// CoAP token for matching requests to responses / observer state.
+    pub token: Vec<u8>,
 }
 
 impl Request {
@@ -211,7 +213,13 @@ impl Request {
             query: QueryParams::default(),
             interface: None,
             observe: None,
+            token: Vec::new(),
         }
+    }
+
+    pub fn with_token(mut self, token: Vec<u8>) -> Self {
+        self.token = token;
+        self
     }
 
     pub fn with_path(mut self, path: impl Into<String>) -> Self {

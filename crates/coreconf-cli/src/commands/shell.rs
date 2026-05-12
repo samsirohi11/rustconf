@@ -1,15 +1,15 @@
 use clap::Args;
 use coreconf_model::CompositeModel;
 use coreconf_runtime::EditableFormat;
-use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use rustyline::error::ReadlineError;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use crate::CliError;
 use crate::complete::CoreconfCompleter;
 use crate::session::{FileSession, SaveOptions, Session, StagedChange};
-use crate::CliError;
 
 /// Start an interactive CORECONF shell with a local file-backed datastore.
 #[derive(Args)]
@@ -139,6 +139,23 @@ fn dispatch_command(
     let rest = parts.next();
 
     match verb {
+        "help" | "?" => {
+            eprintln!("Commands:");
+            eprintln!("  get <path>                     read a value");
+            eprintln!("  set <path> <json-value>        stage a change");
+            eprintln!("  delete <path>                  stage a deletion");
+            eprintln!("  dump                           show full datastore as JSON");
+            eprintln!("  diff [--json]                  show staged changes");
+            eprintln!("  save [--force]                 write staged changes to file");
+            eprintln!("  reload                         discard staged changes, re-read file");
+            eprintln!("  help | ?                       show this help");
+            eprintln!("  quit | exit | q [--discard]    exit the shell");
+            eprintln!();
+            eprintln!("Values are JSON.  Predicate paths use [key='value'] syntax.");
+            eprintln!("Tab completes commands and model paths.");
+            Ok(ShellAction::Continue)
+        }
+
         "quit" | "exit" | "q" => {
             if matches!(path, Some("--discard")) {
                 return Ok(ShellAction::Quit);
@@ -265,7 +282,7 @@ fn resolve_format(
     })
 }
 
-fn changes_to_text(changes: &[StagedChange], model: Option<&CompositeModel>) -> Vec<String> {
+pub fn changes_to_text(changes: &[StagedChange], model: Option<&CompositeModel>) -> Vec<String> {
     changes
         .iter()
         .flat_map(|change| match (&change.before, &change.after) {
@@ -298,7 +315,9 @@ fn changes_to_text(changes: &[StagedChange], model: Option<&CompositeModel>) -> 
 /// Render a JSON value for diff display, resolving SID integers to names
 /// when a model is available.
 fn format_value(model: Option<&CompositeModel>, value: &Value) -> String {
-    let resolved = model.map(|m| resolve_sids_in_value(m, value.clone())).unwrap_or_else(|| value.clone());
+    let resolved = model
+        .map(|m| resolve_sids_in_value(m, value.clone()))
+        .unwrap_or_else(|| value.clone());
     compact_json(&resolved)
 }
 

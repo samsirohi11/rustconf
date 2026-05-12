@@ -1,4 +1,5 @@
-use std::net::{ToSocketAddrs, UdpSocket};
+use std::collections::HashMap;
+use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
 use coap_lite::block_handler::BlockValue;
@@ -195,6 +196,8 @@ pub struct CoapLiteServer {
     socket: UdpSocket,
     resource_path: String,
     handler: RequestHandler,
+    /// Maps observer token → peer address for unsolicited notifications.
+    observer_peers: HashMap<Vec<u8>, SocketAddr>,
 }
 
 impl CoapLiteServer {
@@ -207,6 +210,7 @@ impl CoapLiteServer {
             socket: UdpSocket::bind(bind_addr)?,
             resource_path: resource_path.into(),
             handler,
+            observer_peers: HashMap::new(),
         })
     }
 
@@ -226,13 +230,69 @@ impl CoapLiteServer {
         &mut self.handler
     }
 
-    pub fn handle_packet(&mut self, packet: &Packet) -> Packet {
+    /// Handle a packet from a known peer.  Associates the peer with any
+    /// observer registration so unsolicited notifications can be sent back.
+    pub fn handle_packet(&mut self, packet: &Packet, peer: SocketAddr) -> Packet {
         let request = packet_to_request(packet, &self.resource_path);
         let response = match request {
-            Ok(request) => self.handler.handle(&request),
+            Ok(ref req) => {
+                // Track peer for observer registration (Observe=0 on /s).
+                if req.observe == Some(0) && !req.token.is_empty() {
+                    self.observer_peers.insert(req.token.clone(), peer);
+                }
+                // Remove on Observe=1 (client deregisters).
+                if req.observe == Some(1) && !req.token.is_empty() {
+                    self.observer_peers.remove(&req.token);
+                }
+                self.handler.handle(req)
+            }
             Err(response) => response,
         };
         response_to_packet(packet, response)
+    }
+
+    /// Send pending notifications to all registered observers.
+    /// Call after each request so observers receive push updates promptly.
+    pub fn flush_pending_notifications(&mut self) {
+        // Snapshot peer list — pending_notifications takes &mut self.
+        let peers: Vec<(Vec<u8>, SocketAddr)> = self
+            .observer_peers
+            .iter()
+            .map(|(t, p)| (t.clone(), *p))
+            .collect();
+
+        for (token, peer) in &peers {
+            let pending = self.handler.pending_notifications(token);
+            for (_resource, sequence) in pending {
+                // Re-fetch the full datastore as the notification payload
+                // (simplest correct approach — observers get the current state).
+                let value = self.handler.datastore().get_all();
+                let notification_payload = encode_notification(&value);
+
+                if let Ok(payload) = notification_payload {
+                    let response =
+                        Response::observe(payload, ContentFormat::YangDataCbor, sequence);
+                    // Build a non-confirmable notification packet.
+                    let mut packet = Packet::new();
+                    packet.header.message_id = 0;
+                    packet.header.set_type(MessageType::NonConfirmable);
+                    packet.set_token(token.clone());
+                    packet.header.code = response_code_to_coap(response.code);
+                    if !response.payload.is_empty() {
+                        packet.payload = response.payload;
+                        if let Some(format) = response.content_format {
+                            packet.set_content_format(content_format_to_coap(format));
+                        }
+                    }
+                    if let Some(seq) = response.observe {
+                        packet.set_observe_value(seq);
+                    }
+                    if let Ok(bytes) = packet.to_bytes() {
+                        let _ = self.socket.send_to(&bytes, *peer);
+                    }
+                }
+            }
+        }
     }
 
     pub fn serve_once(&mut self) -> Result<()> {
@@ -240,18 +300,27 @@ impl CoapLiteServer {
         let (len, peer) = self.socket.recv_from(&mut buffer)?;
         let packet =
             Packet::from_bytes(&buffer[..len]).map_err(|error| invalid_data(error.to_string()))?;
-        let response = self.handle_packet(&packet);
+        let response = self.handle_packet(&packet, peer);
         let bytes = response
             .to_bytes()
             .map_err(|error| invalid_data(error.to_string()))?;
         self.socket.send_to(&bytes, peer)?;
+        self.flush_pending_notifications();
         Ok(())
     }
 }
 
+/// Encode a JSON value as CBOR for an observe notification payload.
+fn encode_notification(value: &serde_json::Value) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    ciborium::into_writer(value, &mut bytes)
+        .map_err(|error| CoreconfError::CborEncode(error.to_string()))?;
+    Ok(bytes)
+}
+
 pub fn packet_to_request(
     packet: &Packet,
-    resource_path: &str,
+    _resource_path: &str,
 ) -> std::result::Result<Request, Response> {
     let method = match packet.header.code {
         MessageClass::Request(RequestType::Get) => Method::Get,
@@ -266,33 +335,27 @@ pub fn packet_to_request(
     };
 
     let uri_path = uri_path(packet);
-    let Some(remaining_path) = uri_path.strip_prefix(resource_path.trim_matches('/')) else {
-        return Err(Response::not_found(&uri_path));
-    };
-    let remaining = remaining_path.trim_start_matches('/');
+    let trimmed = uri_path.trim_start_matches('/');
 
-    // Extract CORECONF interface from the first URI path segment (`c` or `s`).
-    //
-    // When resource_path is empty, the raw URI path carries the interface
-    // (e.g. "c" or "c/some/path").  When resource_path is already the
-    // interface segment (e.g. "c"), remaining will be empty and the
-    // interface is inferred from the resource_path itself.
-    let (path, interface) = if remaining.is_empty() {
-        // No sub-path — infer interface from resource_path (legacy compatibility).
-        (
-            String::new(),
-            Interface::from_uri_segment(resource_path.trim_matches('/')),
-        )
-    } else if let Some((first, rest)) = remaining.split_once('/') {
+    // Detect CORECONF interface from the first URI path segment (`c` or `s`).
+    // This works regardless of the configured resource_path — both /c and /s
+    // are always served.
+    let (remaining, interface) = if let Some((first, rest)) = trimmed.split_once('/') {
         if let Some(iface) = Interface::from_uri_segment(first) {
             (rest.to_string(), Some(iface))
         } else {
-            (remaining.to_string(), None)
+            (trimmed.to_string(), None)
         }
-    } else if let Some(iface) = Interface::from_uri_segment(remaining) {
+    } else if let Some(iface) = Interface::from_uri_segment(trimmed) {
         (String::new(), Some(iface))
     } else {
-        (remaining.to_string(), None)
+        (trimmed.to_string(), None)
+    };
+
+    let path = if remaining.is_empty() {
+        String::new()
+    } else {
+        format!("/{remaining}")
     };
 
     let mut request = Request::new(method).with_path(if path.is_empty() {
@@ -319,6 +382,9 @@ pub fn packet_to_request(
     if let Some(Ok(observe_value)) = packet.get_observe_value() {
         request.observe = Some(observe_value);
     }
+
+    // Extract CoAP token for observer tracking.
+    request.token = packet.get_token().to_vec();
 
     Ok(request)
 }
