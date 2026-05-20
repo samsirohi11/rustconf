@@ -123,8 +123,9 @@ pub fn encode_editable_value(
         }
         EditableFormat::Cbor => {
             let sid_value = model.identifier_value_to_sid_value(value.clone())?;
+            let ciborium_val = coreconf_model::codec::json_to_cbor_value(model, &sid_value, 0);
             let mut bytes = Vec::new();
-            ciborium::into_writer(&sid_value, &mut bytes)
+            ciborium::into_writer(&ciborium_val, &mut bytes)
                 .map_err(|error| CoreconfError::CborEncode(error.to_string()))?;
             Ok(bytes)
         }

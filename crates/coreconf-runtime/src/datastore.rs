@@ -40,8 +40,7 @@ impl Datastore {
     /// let ds = Datastore::from_cbor(model, &cbor_payload)?;
     /// ```
     pub fn from_cbor(model: CoreconfModel, cbor: &[u8]) -> Result<Self> {
-        let coreconf_value: serde_json::Value =
-            ciborium::from_reader(cbor).map_err(|e| CoreconfError::CborDecode(e.to_string()))?;
+        let coreconf_value = coreconf_model::codec::cbor_to_json_value(cbor)?;
         let value = model
             .composite_model()
             .sid_value_to_identifier_value_preserve_sids(coreconf_value)?;
@@ -123,8 +122,7 @@ impl Datastore {
     /// This is used for observe notifications where each response carries
     /// a complete replacement of a subtree (e.g. history time-series).
     pub fn replace_from_cbor(&mut self, cbor: &[u8]) -> Result<()> {
-        let coreconf_value: serde_json::Value =
-            ciborium::from_reader(cbor).map_err(|e| CoreconfError::CborDecode(e.to_string()))?;
+        let coreconf_value = coreconf_model::codec::cbor_to_json_value(cbor)?;
         let value = self
             .model
             .sid_value_to_identifier_value_preserve_sids(coreconf_value)?;
@@ -330,7 +328,31 @@ impl Datastore {
     }
 
     pub fn encode_instances(&self, instances: &[Instance]) -> Result<Vec<u8>> {
-        encode_instances(instances)
+        let mut bytes = Vec::new();
+        for inst in instances {
+            let xpath = if let Some(sid) = inst.path.absolute_sid() {
+                self.model.get_identifier(sid).map(|id| id.to_string()).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            
+            let sid_value = match &inst.value {
+                Some(value) => {
+                    self.model.identifier_value_to_sid_value_at_path(value.clone(), &xpath)?
+                }
+                None => Value::Null,
+            };
+            
+            let mut inst_map = serde_json::Map::new();
+            let sid = inst.path.absolute_sid().unwrap_or(0);
+            inst_map.insert(sid.to_string(), sid_value);
+            let inst_json = Value::Object(inst_map);
+            
+            let ciborium_val = coreconf_model::codec::json_to_cbor_value(&self.model, &inst_json, 0);
+            ciborium::into_writer(&ciborium_val, &mut bytes)
+                .map_err(|e| CoreconfError::CborEncode(e.to_string()))?;
+        }
+        Ok(bytes)
     }
 
     /// Return list-key predicate strings for entries under a list XPath.
@@ -519,8 +541,9 @@ impl Datastore {
 
 fn encode_identifier_value_to_cbor(model: &CompositeModel, value: &Value) -> Result<Vec<u8>> {
     let sid_value = model.identifier_value_to_sid_value(value.clone())?;
+    let ciborium_val = coreconf_model::codec::json_to_cbor_value(model, &sid_value, 0);
     let mut bytes = Vec::new();
-    ciborium::into_writer(&sid_value, &mut bytes)
+    ciborium::into_writer(&ciborium_val, &mut bytes)
         .map_err(|error| CoreconfError::CborEncode(error.to_string()))?;
     Ok(bytes)
 }

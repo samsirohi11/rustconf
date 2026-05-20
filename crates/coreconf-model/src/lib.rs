@@ -50,8 +50,7 @@ impl CoreconfModel {
     }
 
     pub fn to_value(&self, cbor_data: &[u8]) -> Result<Value> {
-        let coreconf_value: Value = ciborium::from_reader(cbor_data)
-            .map_err(|e| CoreconfError::CborDecode(e.to_string()))?;
+        let coreconf_value = codec::cbor_to_json_value(cbor_data)?;
         self.composite.sid_value_to_identifier_value(coreconf_value)
     }
 

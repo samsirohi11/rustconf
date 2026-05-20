@@ -30,17 +30,17 @@ impl Interface {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum ContentFormat {
-    YangDataCbor = 112,
-    YangIdentifiersCbor = 311,
-    YangInstancesCborSeq = 313,
+    YangDataCbor = 140,
+    YangIdentifiersCbor = 141,
+    YangInstancesCborSeq = 143,
 }
 
 impl ContentFormat {
     pub fn from_u16(value: u16) -> Option<Self> {
         match value {
-            112 => Some(Self::YangDataCbor),
-            311 => Some(Self::YangIdentifiersCbor),
-            313 => Some(Self::YangInstancesCborSeq),
+            140 => Some(Self::YangDataCbor),
+            141 => Some(Self::YangIdentifiersCbor),
+            143 => Some(Self::YangInstancesCborSeq),
             _ => None,
         }
     }

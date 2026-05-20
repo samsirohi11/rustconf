@@ -610,7 +610,7 @@ fn from_cbor_instance_seq_reconstructs_datastore() {
         .unwrap();
 
     // Decode the CBOR value so we can embed it in the instance map.
-    let decoded_value: serde_json::Value = ciborium::from_reader(value_cbor.as_slice()).unwrap();
+    let decoded_value: serde_json::Value = coreconf_model::codec::cbor_to_json_value(value_cbor.as_slice()).unwrap();
 
     let root_sid = sid("/coreconf-m2m:transducers");
     let instance_map = serde_json::json!({ root_sid.to_string(): decoded_value });

@@ -193,8 +193,9 @@ pub fn decode_instances(bytes: &[u8]) -> Result<Vec<Instance>> {
     let mut cursor = std::io::Cursor::new(bytes);
 
     while (cursor.position() as usize) < bytes.len() {
-        let value: Value = ciborium::from_reader(&mut cursor)
+        let ciborium_val: ciborium::value::Value = ciborium::from_reader(&mut cursor)
             .map_err(|e| CoreconfError::CborDecode(e.to_string()))?;
+        let value = crate::codec::ciborium_value_to_serde(ciborium_val)?;
 
         if let Value::Object(map) = value {
             for (key, val) in map {

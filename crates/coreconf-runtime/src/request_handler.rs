@@ -81,28 +81,28 @@ impl RequestHandler {
     /// notified on the next poll.  Converts identifier paths to SID strings
     /// so they match the SIDs observers registered via FETCH.
     pub fn mark_changed(&mut self, path: &str) {
-        // Walk up the canonical path to find the shallowest known SID
-        // that registered observers will be watching.
-        if let Some(sid) = self.top_level_sid_for_path(path) {
-            self.dirty_resources.insert(sid.to_string());
-        } else {
-            self.dirty_resources.insert(path.to_string());
-        }
-    }
-
-    /// Walk up the canonical path segments to find the closest ancestor
-    /// with a known SID.  E.g. `/m:list[key]/leaf` → SID of `/m:list`.
-    fn top_level_sid_for_path(&self, path: &str) -> Option<i64> {
-        let parsed = PredicatePath::parse(path).ok()?;
+        let parsed = match PredicatePath::parse(path) {
+            Ok(p) => p,
+            Err(_) => {
+                self.dirty_resources.insert(path.to_string());
+                return;
+            }
+        };
         let canonical = parsed.canonical_path.trim_start_matches('/');
         let segments: Vec<&str> = canonical.split('/').filter(|s| !s.is_empty()).collect();
-        for end in (1..=segments.len()).rev() {
+        
+        let mut found_any = false;
+        for end in 1..=segments.len() {
             let candidate = format!("/{}", segments[..end].join("/"));
             if let Some(sid) = self.datastore.model().get_sid(&candidate) {
-                return Some(sid);
+                self.dirty_resources.insert(sid.to_string());
+                found_any = true;
             }
         }
-        None
+        
+        if !found_any {
+            self.dirty_resources.insert(path.to_string());
+        }
     }
 
     /// Collect pending notifications for a given observer token.
@@ -218,15 +218,25 @@ impl RequestHandler {
         }
 
         match self.datastore.get_path(&request.path) {
-            Ok(Some(value)) => match encode_json_value(&value) {
-                Ok(payload) => {
-                    let filtered = apply_query_filters(&payload, &request.query);
-                    Response::content(filtered, ContentFormat::YangDataCbor)
+            Ok(Some(value)) => {
+                let parsed = match PredicatePath::parse(&request.path) {
+                    Ok(p) => p,
+                    Err(error) => return Response::error(ResponseCode::BadRequest, &error.to_string()),
+                };
+                let sid_val = match self.datastore.model().identifier_value_to_sid_value_at_path(value, &parsed.canonical_path) {
+                    Ok(v) => v,
+                    Err(error) => return Response::error(ResponseCode::InternalServerError, &error.to_string()),
+                };
+                match encode_json_value(self.datastore.model(), &sid_val) {
+                    Ok(payload) => {
+                        let filtered = apply_query_filters(&payload, &request.query);
+                        Response::content(filtered, ContentFormat::YangDataCbor)
+                    }
+                    Err(error) => {
+                        Response::error(ResponseCode::InternalServerError, &error.to_string())
+                    }
                 }
-                Err(error) => {
-                    Response::error(ResponseCode::InternalServerError, &error.to_string())
-                }
-            },
+            }
             Ok(None) => Response::not_found(&request.path),
             Err(error) => Response::error(ResponseCode::BadRequest, &error.to_string()),
         }
@@ -327,21 +337,37 @@ impl RequestHandler {
                     let Some(sid) = instance.path.absolute_sid() else {
                         continue;
                     };
-                    let Some(identifier) = self.datastore.model().get_identifier(sid) else {
-                        return Response::error(
-                            ResponseCode::Conflict,
-                            &CoreconfError::IdentifierNotFound(sid).to_string(),
-                        );
+                    let mut keys = Vec::new();
+                    for component in &instance.path.components {
+                        if let coreconf_model::instance_id::PathComponent::KeyValue(val) = component {
+                            keys.push(val.clone());
+                        }
+                    }
+                    let xpath = match self.datastore.create_xpath(sid, &keys) {
+                        Ok(xp) => xp,
+                        Err(error) => return Response::error(ResponseCode::Conflict, &error.to_string()),
                     };
-                    let identifier = identifier.to_string();
-                    let result = match instance.value {
-                        Some(value) => self.datastore.set_path(&identifier, value),
-                        None => self.datastore.delete_path(&identifier).map(|_| ()),
+                    let parsed_xpath = match PredicatePath::parse(&xpath) {
+                        Ok(p) => p,
+                        Err(error) => return Response::error(ResponseCode::Conflict, &error.to_string()),
+                    };
+                    let converted_value = match instance.value {
+                        Some(value) => {
+                            match self.datastore.model().sid_value_to_identifier_value_at_path(value, &parsed_xpath.canonical_path) {
+                                Ok(v) => Some(v),
+                                Err(error) => return Response::error(ResponseCode::Conflict, &error.to_string()),
+                            }
+                        }
+                        None => None,
+                    };
+                    let result = match converted_value {
+                        Some(value) => self.datastore.set_path(&xpath, value),
+                        None => self.datastore.delete_path(&xpath).map(|_| ()),
                     };
                     if let Err(error) = result {
                         return Response::error(ResponseCode::Conflict, &error.to_string());
                     }
-                    self.mark_changed(&identifier);
+                    self.mark_changed(&xpath);
                 }
                 Response::changed()
             }
@@ -361,7 +387,7 @@ impl RequestHandler {
         };
 
         match invocation {
-            Ok(Some(value)) => match encode_json_value(&value) {
+            Ok(Some(value)) => match encode_json_value(self.datastore.model(), &value) {
                 Ok(payload) => Response::content(payload, ContentFormat::YangDataCbor),
                 Err(error) => {
                     Response::error(ResponseCode::InternalServerError, &error.to_string())
@@ -390,15 +416,29 @@ impl RequestHandler {
             let Some(sid) = instance.path.absolute_sid() else {
                 continue;
             };
-            let identifier = self
-                .datastore
-                .model()
-                .get_identifier(sid)
-                .ok_or(CoreconfError::IdentifierNotFound(sid))?
-                .to_string();
-            last = self
+            let mut keys = Vec::new();
+            for component in &instance.path.components {
+                if let coreconf_model::instance_id::PathComponent::KeyValue(val) = component {
+                    keys.push(val.clone());
+                }
+            }
+            let xpath = self.datastore.create_xpath(sid, &keys)?;
+            let parsed_xpath = PredicatePath::parse(&xpath)?;
+            let converted_value = match instance.value {
+                Some(value) => {
+                    Some(self.datastore.model().sid_value_to_identifier_value_at_path(value, &parsed_xpath.canonical_path)?)
+                }
+                None => None,
+            };
+            let result = self
                 .operations
-                .invoke(&identifier, instance.value.as_ref())?;
+                .invoke(&xpath, converted_value.as_ref())?;
+            last = match result {
+                Some(val) => {
+                    Some(self.datastore.model().identifier_value_to_sid_value_at_path(val, &parsed_xpath.canonical_path)?)
+                }
+                None => None,
+            };
         }
         Ok(last)
     }
@@ -412,16 +452,27 @@ impl RequestHandler {
         let parsed = PredicatePath::parse(path)?;
         let input = match content_format.into() {
             Some(ContentFormat::YangDataCbor) if !payload.is_empty() => {
-                Some(decode_json_value(payload)?)
+                let sid_val = decode_json_value(payload)?;
+                Some(self.datastore.model().sid_value_to_identifier_value_at_path(sid_val, &parsed.canonical_path)?)
             }
             Some(ContentFormat::YangInstancesCborSeq) => None,
             Some(_) => return Err(CoreconfError::UnsupportedContentFormat),
             None if payload.is_empty() => None,
-            None => Some(decode_json_value(payload)?),
+            None => {
+                let sid_val = decode_json_value(payload)?;
+                Some(self.datastore.model().sid_value_to_identifier_value_at_path(sid_val, &parsed.canonical_path)?)
+            }
         };
 
-        self.operations
-            .invoke(&parsed.canonical_path, input.as_ref())
+        let result = self.operations
+            .invoke(&parsed.canonical_path, input.as_ref())?;
+        match result {
+            Some(val) => {
+                let sid_val = self.datastore.model().identifier_value_to_sid_value_at_path(val, &parsed.canonical_path)?;
+                Ok(Some(sid_val))
+            }
+            None => Ok(None),
+        }
     }
 
     fn parse_fetch_request(&self, payload: &[u8]) -> Result<Vec<(i64, Vec<Value>)>> {
@@ -490,15 +541,16 @@ fn is_supported_fetch_key_value(value: &Value) -> bool {
     matches!(value, Value::Bool(_) | Value::Number(_) | Value::String(_))
 }
 
-fn encode_json_value(value: &Value) -> Result<Vec<u8>> {
+fn encode_json_value(model: &coreconf_model::CompositeModel, value: &Value) -> Result<Vec<u8>> {
+    let ciborium_val = coreconf_model::codec::json_to_cbor_value(model, value, 0);
     let mut bytes = Vec::new();
-    ciborium::into_writer(value, &mut bytes)
+    ciborium::into_writer(&ciborium_val, &mut bytes)
         .map_err(|error| CoreconfError::CborEncode(error.to_string()))?;
     Ok(bytes)
 }
 
 fn decode_json_value(payload: &[u8]) -> Result<Value> {
-    ciborium::from_reader(payload).map_err(|error| CoreconfError::CborDecode(error.to_string()))
+    coreconf_model::codec::cbor_to_json_value(payload)
 }
 
 /// Apply `c=` (content) and `d=` (defaults) query filters to a CBOR payload.

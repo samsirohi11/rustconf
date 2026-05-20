@@ -12,7 +12,7 @@ fn encode_value(value: &serde_json::Value) -> Vec<u8> {
 }
 
 fn decode_value(bytes: &[u8]) -> serde_json::Value {
-    ciborium::from_reader(bytes).unwrap()
+    coreconf_model::codec::cbor_to_json_value(bytes).unwrap()
 }
 
 fn runtime_model() -> CompositeModel {

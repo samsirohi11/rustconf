@@ -109,10 +109,32 @@ impl CompositeModel {
         self.process_value_for_sid(&json_data, None, 0)
     }
 
+    pub fn identifier_value_to_sid_value_at_path(
+        &self,
+        json_data: Value,
+        canonical_path: &str,
+    ) -> Result<Value> {
+        let sid = self.get_sid(canonical_path).ok_or_else(|| {
+            CoreconfError::SidNotFound(canonical_path.to_string())
+        })?;
+        self.process_value_for_sid(&json_data, Some(canonical_path), sid)
+    }
+
     /// Decode CORECONF CBOR to identifier-keyed JSON, converting SIDs to
     /// human-readable names for identityref and enumeration leaf values.
     pub fn sid_value_to_identifier_value(&self, coreconf_data: Value) -> Result<Value> {
         self.process_value_for_identifier(&coreconf_data, 0, None, true)
+    }
+
+    pub fn sid_value_to_identifier_value_at_path(
+        &self,
+        coreconf_data: Value,
+        canonical_path: &str,
+    ) -> Result<Value> {
+        let sid = self.get_sid(canonical_path).ok_or_else(|| {
+            CoreconfError::SidNotFound(canonical_path.to_string())
+        })?;
+        self.process_value_for_identifier(&coreconf_data, sid, Some(canonical_path), true)
     }
 
     /// Like `sid_value_to_identifier_value`, but preserves integer SIDs for
@@ -139,13 +161,18 @@ impl CompositeModel {
                         None => format!("/{key}"),
                     };
 
-                    let child_sid = self
-                        .get_sid(&qualified_path)
-                        .ok_or_else(|| CoreconfError::SidNotFound(qualified_path.clone()))?;
-                    let sid_delta = child_sid - parent_sid;
-                    let processed =
-                        self.process_value_for_sid(v, Some(&qualified_path), child_sid)?;
-                    new_map.insert(sid_delta.to_string(), processed);
+                    if let Some(child_sid) = self.get_sid(&qualified_path) {
+                        let sid_delta = child_sid - parent_sid;
+                        let processed =
+                            self.process_value_for_sid(v, Some(&qualified_path), child_sid)?;
+                        new_map.insert(sid_delta.to_string(), processed);
+                    } else {
+                        // Key not found in SID mapping (e.g. "status" or custom fields).
+                        // Keep key as is and recursively process the value.
+                        let processed =
+                            self.process_value_for_sid(v, Some(&qualified_path), parent_sid)?;
+                        new_map.insert(key.clone(), processed);
+                    }
                 }
                 Ok(Value::Object(new_map))
             }
@@ -179,33 +206,46 @@ impl CompositeModel {
             Value::Object(map) => {
                 let mut new_map = Map::new();
                 for (key, v) in map {
-                    let key_delta: i64 = key.parse().map_err(|_| {
-                        CoreconfError::TypeConversion(format!("invalid SID key: {key}"))
-                    })?;
-                    let sid = key_delta + delta;
-                    let identifier = self
-                        .get_identifier(sid)
-                        .ok_or(CoreconfError::IdentifierNotFound(sid))?;
-                    // Use storage_key logic: full module-qualified name at
-                    // the top level, just the leaf name at deeper levels,
-                    // matching how Datastore::set_path stores keys.
-                    let depth = identifier.chars().filter(|&c| c == '/').count();
-                    let storage_key = if depth <= 1 {
-                        identifier.trim_start_matches('/').to_string()
+                    if let Ok(key_delta) = key.parse::<i64>() {
+                        let sid = key_delta + delta;
+                        if let Some(identifier) = self.get_identifier(sid) {
+                            let depth = identifier.chars().filter(|&c| c == '/').count();
+                            let storage_key = if depth <= 1 {
+                                identifier.trim_start_matches('/').to_string()
+                            } else {
+                                identifier
+                                    .rsplit('/')
+                                    .next()
+                                    .unwrap_or(identifier)
+                                    .to_string()
+                            };
+                            let processed = self.process_value_for_identifier(
+                                v,
+                                sid,
+                                Some(identifier),
+                                resolve_identityref,
+                            )?;
+                            new_map.insert(storage_key, processed);
+                        } else {
+                            // SID not found in map, preserve key as is
+                            let processed = self.process_value_for_identifier(
+                                v,
+                                sid,
+                                current_path,
+                                resolve_identityref,
+                            )?;
+                            new_map.insert(key.clone(), processed);
+                        }
                     } else {
-                        identifier
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or(identifier)
-                            .to_string()
-                    };
-                    let processed = self.process_value_for_identifier(
-                        v,
-                        sid,
-                        Some(identifier),
-                        resolve_identityref,
-                    )?;
-                    new_map.insert(storage_key, processed);
+                        // Already a string identifier key (e.g. "reason" or "status")
+                        let processed = self.process_value_for_identifier(
+                            v,
+                            delta,
+                            current_path,
+                            resolve_identityref,
+                        )?;
+                        new_map.insert(key.clone(), processed);
+                    }
                 }
                 Ok(Value::Object(new_map))
             }

@@ -96,13 +96,14 @@ impl YangType {
     }
 
     fn strict_from_string(s: &str) -> Result<Self> {
-        let yang_type = Self::from_string(s);
-        if matches!(yang_type, YangType::Unknown(_)) {
-            return Err(CoreconfError::InvalidSidFile(format!(
-                "unknown YANG type '{s}'"
-            )));
+        let parsed = Self::from_string(s);
+        if let YangType::Unknown(other) = parsed {
+            Err(CoreconfError::InvalidSidFile(format!(
+                "unknown YANG type: {other}"
+            )))
+        } else {
+            Ok(parsed)
         }
-        Ok(yang_type)
     }
 }
 
@@ -206,7 +207,21 @@ pub fn cast_to_coreconf(
                 "enumeration value not found: {value:?}"
             )))
         }
-        YangType::Empty | YangType::Leafref | YangType::InstanceIdentifier | YangType::Bits => {
+        YangType::Empty => {
+            if value.is_null() {
+                Ok(Value::Null)
+            } else if let Some(arr) = value.as_array()
+                && arr.len() == 1
+                && arr[0].is_null()
+            {
+                Ok(Value::Null)
+            } else {
+                Err(CoreconfError::TypeConversion(format!(
+                    "cannot convert {value:?} to empty type"
+                )))
+            }
+        }
+        YangType::Leafref | YangType::InstanceIdentifier | YangType::Bits => {
             Ok(value.clone())
         }
         YangType::Union(types) => {
@@ -255,7 +270,15 @@ pub fn cast_from_coreconf(
             _ => unreachable!(),
         },
         YangType::Decimal64 => {
-            let f = value_to_f64(value)?;
+            let f = if let Some(arr) = value.as_array()
+                && arr.len() == 2
+                && let Some(exp) = arr[0].as_i64()
+                && let Some(mant) = arr[1].as_i64()
+            {
+                (mant as f64) * 10.0f64.powi(exp as i32)
+            } else {
+                value_to_f64(value)?
+            };
             serde_json::Number::from_f64(f)
                 .map(Value::Number)
                 .ok_or_else(|| {
@@ -321,7 +344,10 @@ pub fn cast_from_coreconf(
                 "enumeration value not found for numeric value {n}"
             )))
         }
-        YangType::Empty | YangType::Leafref | YangType::InstanceIdentifier | YangType::Bits => {
+        YangType::Empty => {
+            Ok(Value::Array(vec![Value::Null]))
+        }
+        YangType::Leafref | YangType::InstanceIdentifier | YangType::Bits => {
             Ok(value.clone())
         }
         YangType::Union(types) => {
