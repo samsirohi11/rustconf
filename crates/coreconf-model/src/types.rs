@@ -221,9 +221,7 @@ pub fn cast_to_coreconf(
                 )))
             }
         }
-        YangType::Leafref | YangType::InstanceIdentifier | YangType::Bits => {
-            Ok(value.clone())
-        }
+        YangType::Leafref | YangType::InstanceIdentifier | YangType::Bits => Ok(value.clone()),
         YangType::Union(types) => {
             for t in types {
                 if let Ok(v) = cast_to_coreconf(value, t, sid_lookup) {
@@ -344,12 +342,8 @@ pub fn cast_from_coreconf(
                 "enumeration value not found for numeric value {n}"
             )))
         }
-        YangType::Empty => {
-            Ok(Value::Array(vec![Value::Null]))
-        }
-        YangType::Leafref | YangType::InstanceIdentifier | YangType::Bits => {
-            Ok(value.clone())
-        }
+        YangType::Empty => Ok(Value::Array(vec![Value::Null])),
+        YangType::Leafref | YangType::InstanceIdentifier | YangType::Bits => Ok(value.clone()),
         YangType::Union(types) => {
             for t in types {
                 if let Ok(v) = cast_from_coreconf(value, t, id_lookup, module_name) {

@@ -1,4 +1,4 @@
-use coreconf_model::instance_id::{decode_instances, encode_instances};
+use coreconf_model::instance_id::decode_instances;
 use coreconf_model::{
     CompositeModel, CoreconfError, CoreconfModel, Instance, InstancePath, Result, YangType,
 };
@@ -331,24 +331,28 @@ impl Datastore {
         let mut bytes = Vec::new();
         for inst in instances {
             let xpath = if let Some(sid) = inst.path.absolute_sid() {
-                self.model.get_identifier(sid).map(|id| id.to_string()).unwrap_or_default()
+                self.model
+                    .get_identifier(sid)
+                    .map(|id| id.to_string())
+                    .unwrap_or_default()
             } else {
                 String::new()
             };
-            
+
             let sid_value = match &inst.value {
-                Some(value) => {
-                    self.model.identifier_value_to_sid_value_at_path(value.clone(), &xpath)?
-                }
+                Some(value) => self
+                    .model
+                    .identifier_value_to_sid_value_at_path(value.clone(), &xpath)?,
                 None => Value::Null,
             };
-            
+
             let mut inst_map = serde_json::Map::new();
             let sid = inst.path.absolute_sid().unwrap_or(0);
             inst_map.insert(sid.to_string(), sid_value);
             let inst_json = Value::Object(inst_map);
-            
-            let ciborium_val = coreconf_model::codec::json_to_cbor_value(&self.model, &inst_json, 0);
+
+            let ciborium_val =
+                coreconf_model::codec::json_to_cbor_value(&self.model, &inst_json, 0);
             ciborium::into_writer(&ciborium_val, &mut bytes)
                 .map_err(|e| CoreconfError::CborEncode(e.to_string()))?;
         }

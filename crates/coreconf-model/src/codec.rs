@@ -51,7 +51,7 @@ pub fn json_to_cbor_value(
             for (k, v) in map {
                 let key_delta: i64 = k.parse().unwrap_or(0);
                 let sid = key_delta + parent_sid;
-                
+
                 let key_val = if let Ok(i) = k.parse::<i64>() {
                     ciborium::value::Value::Integer(i.into())
                 } else {
@@ -125,8 +125,8 @@ pub fn decode_cbor_to_json(model: &CompositeModel, bytes: &[u8]) -> Result<Strin
 
 pub fn cbor_to_json_value(bytes: &[u8]) -> Result<serde_json::Value> {
     let mut cursor = std::io::Cursor::new(bytes);
-    let ciborium_val: ciborium::value::Value = ciborium::from_reader(&mut cursor)
-        .map_err(|e| CoreconfError::CborDecode(e.to_string()))?;
+    let ciborium_val: ciborium::value::Value =
+        ciborium::from_reader(&mut cursor).map_err(|e| CoreconfError::CborDecode(e.to_string()))?;
     ciborium_value_to_serde(ciborium_val)
 }
 
@@ -153,7 +153,10 @@ pub fn ciborium_value_to_serde(val: ciborium::value::Value) -> Result<serde_json
         }
         ciborium::value::Value::Text(s) => Ok(serde_json::Value::String(s)),
         ciborium::value::Value::Bytes(b) => {
-            let arr = b.into_iter().map(|x| serde_json::Value::Number(x.into())).collect();
+            let arr = b
+                .into_iter()
+                .map(|x| serde_json::Value::Number(x.into()))
+                .collect();
             Ok(serde_json::Value::Array(arr))
         }
         ciborium::value::Value::Array(arr) => {
@@ -172,15 +175,20 @@ pub fn ciborium_value_to_serde(val: ciborium::value::Value) -> Result<serde_json
                         val.to_string()
                     }
                     ciborium::value::Value::Text(s) => s,
-                    other => return Err(CoreconfError::TypeConversion(format!("unsupported CBOR map key type: {:?}", other))),
+                    other => {
+                        return Err(CoreconfError::TypeConversion(format!(
+                            "unsupported CBOR map key type: {:?}",
+                            other
+                        )));
+                    }
                 };
                 serde_map.insert(key_str, ciborium_value_to_serde(v)?);
             }
             Ok(serde_json::Value::Object(serde_map))
         }
-        ciborium::value::Value::Tag(_, boxed_val) => {
-            ciborium_value_to_serde(*boxed_val)
-        }
-        _ => Err(CoreconfError::TypeConversion("unsupported CBOR type".into())),
+        ciborium::value::Value::Tag(_, boxed_val) => ciborium_value_to_serde(*boxed_val),
+        _ => Err(CoreconfError::TypeConversion(
+            "unsupported CBOR type".into(),
+        )),
     }
 }

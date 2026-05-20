@@ -114,9 +114,9 @@ impl CompositeModel {
         json_data: Value,
         canonical_path: &str,
     ) -> Result<Value> {
-        let sid = self.get_sid(canonical_path).ok_or_else(|| {
-            CoreconfError::SidNotFound(canonical_path.to_string())
-        })?;
+        let sid = self
+            .get_sid(canonical_path)
+            .ok_or_else(|| CoreconfError::SidNotFound(canonical_path.to_string()))?;
         self.process_value_for_sid(&json_data, Some(canonical_path), sid)
     }
 
@@ -131,9 +131,9 @@ impl CompositeModel {
         coreconf_data: Value,
         canonical_path: &str,
     ) -> Result<Value> {
-        let sid = self.get_sid(canonical_path).ok_or_else(|| {
-            CoreconfError::SidNotFound(canonical_path.to_string())
-        })?;
+        let sid = self
+            .get_sid(canonical_path)
+            .ok_or_else(|| CoreconfError::SidNotFound(canonical_path.to_string()))?;
         self.process_value_for_identifier(&coreconf_data, sid, Some(canonical_path), true)
     }
 
