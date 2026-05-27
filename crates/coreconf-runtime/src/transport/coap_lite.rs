@@ -343,6 +343,7 @@ pub fn packet_to_request(
     let method = match packet.header.code {
         MessageClass::Request(RequestType::Get) => Method::Get,
         MessageClass::Request(RequestType::Post) => Method::Post,
+        MessageClass::Request(RequestType::Delete) => Method::Delete,
         MessageClass::Request(RequestType::Fetch) => Method::Fetch,
         MessageClass::Request(RequestType::Patch) | MessageClass::Request(RequestType::IPatch) => {
             Method::IPatch
@@ -468,7 +469,7 @@ fn default_content_format(method: Method, payload: &[u8]) -> Option<ContentForma
     match method {
         Method::Fetch => Some(ContentFormat::YangIdentifiersCbor),
         Method::IPatch | Method::Post => Some(ContentFormat::YangDataCbor),
-        Method::Get => None,
+        Method::Get | Method::Delete => None,
     }
 }
 

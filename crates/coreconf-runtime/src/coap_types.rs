@@ -56,6 +56,7 @@ pub enum Method {
     Get,
     IPatch,
     Post,
+    Delete,
 }
 
 impl std::fmt::Display for Method {
@@ -65,6 +66,7 @@ impl std::fmt::Display for Method {
             Method::Get => f.write_str("GET"),
             Method::IPatch => f.write_str("iPATCH"),
             Method::Post => f.write_str("POST"),
+            Method::Delete => f.write_str("DELETE"),
         }
     }
 }

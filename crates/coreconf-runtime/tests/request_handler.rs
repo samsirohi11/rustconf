@@ -113,3 +113,40 @@ fn request_handler_rejects_malformed_fetch_payloads() {
 
     assert_eq!(response.code, ResponseCode::BadRequest);
 }
+
+#[test]
+fn request_handler_deletes_existing_path() {
+    let datastore = Datastore::new_in_memory(runtime_model());
+    let mut handler = RequestHandler::new(datastore);
+    handler
+        .datastore_mut()
+        .set_path("/example:devices/device[id='rdc-1']/enabled", json!(true))
+        .unwrap();
+
+    let request =
+        Request::new(Method::Delete).with_path("/example:devices/device[id='rdc-1']/enabled");
+
+    let response = handler.handle(&request);
+
+    assert_eq!(response.code, ResponseCode::Changed);
+    assert_eq!(
+        handler
+            .datastore()
+            .get_path("/example:devices/device[id='rdc-1']/enabled")
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn request_handler_delete_missing_path_returns_not_found() {
+    let datastore = Datastore::new_in_memory(runtime_model());
+    let mut handler = RequestHandler::new(datastore);
+
+    let request =
+        Request::new(Method::Delete).with_path("/example:devices/device[id='rdc-1']/enabled");
+
+    let response = handler.handle(&request);
+
+    assert_eq!(response.code, ResponseCode::NotFound);
+}

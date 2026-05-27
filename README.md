@@ -87,6 +87,7 @@ For a full walkthrough of every operation with real output, see [tutorial.md](tu
 | **FETCH**  | FETCH       | Selectively retrieve data nodes by SID or instance ID       |
 | **iPATCH** | iPATCH      | Modify data nodes (set SID-value or SID-null for delete)    |
 | **POST**   | POST        | Invoke YANG RPC or action via registered operation bindings |
+| **DELETE** | DELETE      | Delete a target data resource by path                      |
 
 ### Interface routing
 
@@ -94,8 +95,8 @@ CORECONF defines two CoAP interfaces:
 
 | Path | Purpose                                         | Allowed methods          |
 | ---- | ----------------------------------------------- | ------------------------ |
-| `/c` | Management — configuration and telemetry data   | GET, FETCH, iPATCH, POST |
-| `/s` | Streaming — time-series and event notifications | FETCH + Observe          |
+| `/c` | Management — configuration and telemetry data   | GET, FETCH, iPATCH, POST, DELETE |
+| `/s` | Streaming — time-series and event notifications | FETCH + Observe                 |
 
 ### CoAP Observe
 
@@ -151,7 +152,7 @@ crates/
     backend.rs         # Backend trait (read_tree / replace_tree)
     memory_backend.rs  # In-memory backend
     file_backend.rs    # File-backed backend (JSON/CBOR with atomic writes)
-    request_handler.rs # GET/FETCH/iPATCH/POST dispatch, /c vs /s routing, observer lifecycle
+    request_handler.rs # GET/FETCH/iPATCH/POST/DELETE dispatch, /c vs /s routing, observer lifecycle
     operations.rs      # OperationBinding trait + OperationRegistry
     coap_types.rs      # Library-agnostic CoAP types: Request, Response, Interface, Observe
     transport/

@@ -155,6 +155,7 @@ impl RequestHandler {
             Method::Fetch => self.handle_fetch(request),
             Method::IPatch => self.handle_ipatch(request),
             Method::Post => self.handle_post(request),
+            Method::Delete => self.handle_delete(request),
         }
     }
 
@@ -307,6 +308,29 @@ impl RequestHandler {
                         Response::error(ResponseCode::InternalServerError, &error.to_string())
                     }
                 }
+            }
+            Err(error) => Response::error(ResponseCode::BadRequest, &error.to_string()),
+        }
+    }
+
+    fn handle_delete(&mut self, request: &Request) -> Response {
+        if request.path.is_empty() {
+            return Response::error(
+                ResponseCode::MethodNotAllowed,
+                "DELETE requires a target resource path",
+            );
+        }
+
+        match self.datastore.delete_path(&request.path) {
+            Ok(true) => {
+                self.mark_changed(&request.path);
+                Response::changed()
+            }
+            Ok(false) => Response::not_found(&request.path),
+            Err(CoreconfError::ValidationError(message))
+                if message.starts_with("unused predicates in path") =>
+            {
+                Response::not_found(&request.path)
             }
             Err(error) => Response::error(ResponseCode::BadRequest, &error.to_string()),
         }
