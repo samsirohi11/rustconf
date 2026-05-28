@@ -30,16 +30,20 @@ impl Interface {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum ContentFormat {
-    YangDataCbor = 140,
+    /// application/yang-fetch+cbor
     YangIdentifiersCbor = 141,
+    /// application/yang-data+cbor;id=sid, used by responses and iPATCH payloads
+    YangDataCbor = 142,
+    /// Legacy/internal yang-instances+cbor-seq value retained for compatibility
+    /// with existing runtime helpers.
     YangInstancesCborSeq = 143,
 }
 
 impl ContentFormat {
     pub fn from_u16(value: u16) -> Option<Self> {
         match value {
-            140 => Some(Self::YangDataCbor),
             141 => Some(Self::YangIdentifiersCbor),
+            142 => Some(Self::YangDataCbor),
             143 => Some(Self::YangInstancesCborSeq),
             _ => None,
         }

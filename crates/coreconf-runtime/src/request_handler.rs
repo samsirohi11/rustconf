@@ -303,7 +303,7 @@ impl RequestHandler {
                 }
 
                 match self.datastore.encode_instances(&instances) {
-                    Ok(payload) => Response::content(payload, ContentFormat::YangInstancesCborSeq),
+                    Ok(payload) => Response::content(payload, ContentFormat::YangDataCbor),
                     Err(error) => {
                         Response::error(ResponseCode::InternalServerError, &error.to_string())
                     }
