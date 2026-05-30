@@ -187,7 +187,13 @@ impl CompositeModel {
                 if let Some(path) = current_path
                     && let Some(yang_type) = self.get_type(path)
                 {
-                    let sid_lookup = |id: &str| self.get_sid(id);
+                    let sid_lookup = |id: &str| {
+                        self.get_sid(id).or_else(|| {
+                            self.sid_files.iter().find_map(|sid_file| {
+                                self.get_sid(&format!("{}:{id}", sid_file.module_name))
+                            })
+                        })
+                    };
                     return cast_to_coreconf(value, yang_type, Some(&sid_lookup));
                 }
                 Ok(value.clone())
@@ -325,5 +331,29 @@ mod tests {
 
         assert_eq!(json_value["example-1:greeting"]["author"], "Obi");
         assert_eq!(json_value["example-1:greeting"]["message"], "Hello there!");
+    }
+
+    #[test]
+    fn test_unqualified_identityref_resolves_against_module() {
+        let sid = r#"{
+            "assignment-range": [{"entry-point": 60000, "size": 10}],
+            "module-name": "example-1",
+            "module-revision": "unknown",
+            "item": [
+                {"namespace": "module", "identifier": "example-1", "status": "unstable", "sid": 60000},
+                {"namespace": "identity", "identifier": "up", "status": "unstable", "sid": 60001},
+                {"namespace": "data", "identifier": "/example-1:state", "status": "unstable", "sid": 60002},
+                {"namespace": "data", "identifier": "/example-1:state/mode", "status": "unstable", "sid": 60003, "type": "identityref"}
+            ],
+            "key-mapping": {}
+        }"#;
+        let model = CompositeModel::from_sid_strings(&[sid]).unwrap();
+        let value: Value = serde_json::json!({"mode": "up"});
+
+        let converted = model
+            .identifier_value_to_sid_value_at_path(value, "/example-1:state")
+            .unwrap();
+
+        assert_eq!(converted["1"], 60001);
     }
 }

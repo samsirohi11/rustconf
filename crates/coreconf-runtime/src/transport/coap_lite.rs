@@ -497,6 +497,11 @@ fn raw_content_format(packet: &Packet) -> Option<u16> {
 /// yang-identifiers+cbor) are recognised correctly.
 fn content_format_from_raw(method: Method, raw: u16) -> Option<ContentFormat> {
     match (method, raw) {
+        // SCHC CORECONF M-rules use 313 as the management payload content-format.
+        // Preserve the method semantics expected by the runtime handlers.
+        (Method::Fetch, 313) => Some(ContentFormat::YangIdentifiersCbor),
+        (Method::IPatch, 313) => Some(ContentFormat::YangDataCbor),
+        (Method::Post, 313) => Some(ContentFormat::YangInstancesCborSeq),
         // RFC 9595 CORECONF content-formats
         (Method::Fetch, 141) => Some(ContentFormat::YangIdentifiersCbor),
         (_, 141) => Some(ContentFormat::YangDataCbor),
@@ -577,4 +582,25 @@ fn invalid_data(message: String) -> CoreconfError {
         std::io::ErrorKind::InvalidData,
         message,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_schc_management_content_format_by_method() {
+        assert_eq!(
+            content_format_from_raw(Method::Fetch, 313),
+            Some(ContentFormat::YangIdentifiersCbor)
+        );
+        assert_eq!(
+            content_format_from_raw(Method::IPatch, 313),
+            Some(ContentFormat::YangDataCbor)
+        );
+        assert_eq!(
+            content_format_from_raw(Method::Post, 313),
+            Some(ContentFormat::YangInstancesCborSeq)
+        );
+    }
 }
