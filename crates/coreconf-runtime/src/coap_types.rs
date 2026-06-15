@@ -27,6 +27,14 @@ impl Interface {
     }
 }
 
+/// SCHC-CORECONF management payload content-format used by the integrated
+/// SCHC rule-management profile.
+///
+/// This is intentionally separate from the RFC CORECONF formats below: the
+/// SCHC management M-Rules match a single compact content-format value and the
+/// transport layer maps it back to method-specific CORECONF payload semantics.
+pub const SCHC_MANAGEMENT_CONTENT_FORMAT: u16 = 313;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum ContentFormat {
