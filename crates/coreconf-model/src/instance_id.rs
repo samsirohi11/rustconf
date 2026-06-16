@@ -197,20 +197,27 @@ pub fn decode_instances(bytes: &[u8]) -> Result<Vec<Instance>> {
             .map_err(|e| CoreconfError::CborDecode(e.to_string()))?;
         let value = crate::codec::ciborium_value_to_serde(ciborium_val)?;
 
-        if let Value::Object(map) = value {
-            for (key, val) in map {
-                let sid: i64 = key
-                    .parse()
-                    .map_err(|_| CoreconfError::TypeConversion("invalid SID in instance".into()))?;
+        match value {
+            Value::Object(map) => {
+                for (key, val) in map {
+                    let sid: i64 = key.parse().map_err(|_| {
+                        CoreconfError::TypeConversion("invalid SID in instance".into())
+                    })?;
 
-                let mut path = InstancePath::new();
-                path.push_delta(sid);
+                    let mut path = InstancePath::new();
+                    path.push_delta(sid);
 
-                if val.is_null() {
-                    instances.push(Instance::delete(path));
-                } else {
-                    instances.push(Instance::new(path, val));
+                    if val.is_null() {
+                        instances.push(Instance::delete(path));
+                    } else {
+                        instances.push(Instance::new(path, val));
+                    }
                 }
+            }
+            _ => {
+                return Err(CoreconfError::TypeConversion(
+                    "invalid instance payload: expected map".into(),
+                ));
             }
         }
     }

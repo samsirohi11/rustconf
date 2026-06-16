@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use coap_lite::block_handler::BlockValue;
 use coap_lite::{
@@ -19,10 +19,21 @@ use crate::request_handler::RequestHandler;
 /// Maximum payload bytes per CoAP block to stay safely under the
 /// 1152-byte default message size after adding headers and options.
 const MAX_BLOCK_PAYLOAD: usize = 1024;
+const BLOCK1_TRANSFER_TTL: Duration = Duration::from_secs(30);
 
 pub trait CoreconfClient {
     fn fetch_snapshot(&mut self) -> Result<Value>;
+    fn fetch_path(&mut self, _path: &str) -> Result<Option<Value>> {
+        Err(CoreconfError::ValidationError(
+            "path GET is not supported by this client".into(),
+        ))
+    }
     fn apply_patch(&mut self, patch: &[(String, Option<Value>)]) -> Result<()>;
+    fn discover(&mut self, _query: Option<&str>) -> Result<String> {
+        Err(CoreconfError::ValidationError(
+            "discovery is not supported by this client".into(),
+        ))
+    }
 }
 
 pub struct CoapLiteClient {
@@ -155,9 +166,29 @@ impl CoapLiteClient {
         let len = self.socket.recv(&mut buffer)?;
         Packet::from_bytes(&buffer[..len]).map_err(|error| invalid_data(error.to_string()))
     }
+
+    fn send_discovery_request(&mut self, query: Option<&str>) -> Result<Packet> {
+        let mut packet = Packet::new();
+        packet.header.message_id = self.next_message_id;
+        self.next_message_id = self.next_message_id.wrapping_add(1);
+        packet.header.code = MessageClass::Request(RequestType::Get);
+        packet.header.set_type(MessageType::Confirmable);
+        packet.set_token(vec![0xC0]);
+        add_uri_path(&mut packet, "/.well-known/core");
+        if let Some(query) = query.filter(|q| !q.is_empty()) {
+            packet.add_option(CoapOption::UriQuery, query.as_bytes().to_vec());
+        }
+        self.send_packet(packet)
+    }
 }
 
 impl CoreconfClient for CoapLiteClient {
+    fn discover(&mut self, query: Option<&str>) -> Result<String> {
+        let response = self.send_discovery_request(query)?;
+        ensure_success(&response)?;
+        String::from_utf8(response.payload).map_err(|error| invalid_data(error.to_string()))
+    }
+
     fn fetch_snapshot(&mut self) -> Result<Value> {
         let response = self.send_coreconf_request(RequestType::Get, None, Vec::new(), None)?;
         ensure_success(&response)?;
@@ -165,12 +196,30 @@ impl CoreconfClient for CoapLiteClient {
         serde_json::from_str(&json).map_err(CoreconfError::from)
     }
 
+    fn fetch_path(&mut self, path: &str) -> Result<Option<Value>> {
+        let response =
+            self.send_coreconf_request(RequestType::Get, Some(path), Vec::new(), None)?;
+        if matches!(
+            response.header.code,
+            MessageClass::Response(ResponseType::NotFound)
+        ) {
+            return Ok(None);
+        }
+        ensure_success(&response)?;
+        let sid_value = coreconf_model::codec::cbor_to_json_value(&response.payload)?;
+        let parsed = crate::PredicatePath::parse(path)?;
+        self.model
+            .sid_value_to_identifier_value_at_path(sid_value, &parsed.canonical_path)
+            .map(Some)
+    }
+
     fn apply_patch(&mut self, patch: &[(String, Option<Value>)]) -> Result<()> {
         for (path, value) in patch {
             let Some(value) = value else {
-                return Err(CoreconfError::ValidationError(
-                    "CoAP path delete is not supported by the reference adapter yet".into(),
-                ));
+                let response =
+                    self.send_coreconf_request(RequestType::Delete, Some(path), Vec::new(), None)?;
+                ensure_success(&response)?;
+                continue;
             };
 
             let mut payload = Vec::new();
@@ -199,6 +248,21 @@ pub struct CoapLiteServer {
     handler: RequestHandler,
     /// Maps observer token → peer address for unsolicited notifications.
     observer_peers: HashMap<Vec<u8>, SocketAddr>,
+    block1_transfers: HashMap<Block1Key, PendingBlock1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Block1Key {
+    peer: SocketAddr,
+    token: Vec<u8>,
+    uri_path: String,
+}
+
+#[derive(Debug)]
+struct PendingBlock1 {
+    payload: Vec<u8>,
+    next_num: u16,
+    updated_at: Instant,
 }
 
 impl CoapLiteServer {
@@ -212,6 +276,7 @@ impl CoapLiteServer {
             resource_path: resource_path.into(),
             handler,
             observer_peers: HashMap::new(),
+            block1_transfers: HashMap::new(),
         })
     }
 
@@ -240,7 +305,12 @@ impl CoapLiteServer {
             return self.well_known_core_response(packet);
         }
 
-        let request = packet_to_request(packet, &self.resource_path);
+        let packet = match self.reassemble_block1(packet, peer) {
+            Block1Outcome::Complete(packet) => packet,
+            Block1Outcome::Respond(response) => return response,
+        };
+
+        let request = packet_to_request(&packet, &self.resource_path);
         let response = match request {
             Ok(ref req) => {
                 // Track peer for observer registration (Observe=0 on /s).
@@ -255,12 +325,95 @@ impl CoapLiteServer {
             }
             Err(response) => response,
         };
-        response_to_packet(packet, response)
+        response_to_packet(&packet, response)
+    }
+
+    fn reassemble_block1(&mut self, packet: &Packet, peer: SocketAddr) -> Block1Outcome {
+        self.expire_block1_transfers();
+        let Some(block1) = packet
+            .get_first_option_as::<BlockValue>(CoapOption::Block1)
+            .and_then(|value| value.ok())
+        else {
+            return Block1Outcome::Complete(packet.clone());
+        };
+
+        let key = Block1Key {
+            peer,
+            token: packet.get_token().to_vec(),
+            uri_path: uri_path(packet),
+        };
+
+        if block1.num == 0 {
+            let pending = PendingBlock1 {
+                payload: packet.payload.clone(),
+                next_num: 1,
+                updated_at: Instant::now(),
+            };
+
+            if block1.more {
+                self.block1_transfers.insert(key, pending);
+                return Block1Outcome::Respond(block1_response(
+                    packet,
+                    ResponseType::Continue,
+                    block1,
+                ));
+            }
+
+            let mut complete = packet.clone();
+            complete.clear_option(CoapOption::Block1);
+            return Block1Outcome::Complete(complete);
+        }
+
+        let Some(pending) = self.block1_transfers.get_mut(&key) else {
+            return Block1Outcome::Respond(block1_response(
+                packet,
+                ResponseType::RequestEntityIncomplete,
+                block1,
+            ));
+        };
+
+        if pending.next_num != block1.num {
+            self.block1_transfers.remove(&key);
+            return Block1Outcome::Respond(block1_response(
+                packet,
+                ResponseType::RequestEntityIncomplete,
+                block1,
+            ));
+        }
+
+        pending.payload.extend_from_slice(&packet.payload);
+        pending.next_num = pending.next_num.saturating_add(1);
+        pending.updated_at = Instant::now();
+
+        if block1.more {
+            return Block1Outcome::Respond(block1_response(packet, ResponseType::Continue, block1));
+        }
+
+        let Some(pending) = self.block1_transfers.remove(&key) else {
+            return Block1Outcome::Respond(block1_response(
+                packet,
+                ResponseType::RequestEntityIncomplete,
+                block1,
+            ));
+        };
+        let mut complete = packet.clone();
+        complete.payload = pending.payload;
+        complete.clear_option(CoapOption::Block1);
+        Block1Outcome::Complete(complete)
+    }
+
+    fn expire_block1_transfers(&mut self) {
+        let now = Instant::now();
+        self.block1_transfers
+            .retain(|_, pending| now.duration_since(pending.updated_at) <= BLOCK1_TRANSFER_TTL);
     }
 
     /// Build a CoRE Link Format response for `/.well-known/core`.
     fn well_known_core_response(&self, request: &Packet) -> Packet {
-        let links = "</c>;rt=\"core.c.ds\";ct=112,</s>;rt=\"core.c.ev\";ct=141;obs".to_string();
+        let (management_path, streaming_path) = advertised_paths(&self.resource_path);
+        let links = format!(
+            "</{management_path}>;rt=\"core.c.ds\";ct=112,</{streaming_path}>;rt=\"core.c.ev\";ct=141;obs"
+        );
         let mut packet = Packet::new();
         packet.header.message_id = request.header.message_id;
         packet.set_token(request.get_token().to_vec());
@@ -283,10 +436,8 @@ impl CoapLiteServer {
         for (token, peer) in &peers {
             let pending = self.handler.pending_notifications(token);
             for (_resource, sequence) in pending {
-                // Re-fetch the full datastore as the notification payload
-                // (simplest correct approach — observers get the current state).
-                let value = self.handler.datastore().get_all();
-                let notification_payload = encode_notification(&value);
+                // Re-fetch the full datastore as CORECONF/SID CBOR.
+                let notification_payload = self.handler.datastore().get_all_cbor();
 
                 if let Ok(payload) = notification_payload {
                     let response =
@@ -329,17 +480,23 @@ impl CoapLiteServer {
     }
 }
 
-/// Encode a JSON value as CBOR for an observe notification payload.
-fn encode_notification(value: &serde_json::Value) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    ciborium::into_writer(value, &mut bytes)
-        .map_err(|error| CoreconfError::CborEncode(error.to_string()))?;
-    Ok(bytes)
+enum Block1Outcome {
+    Complete(Packet),
+    Respond(Packet),
+}
+
+fn block1_response(request: &Packet, code: ResponseType, block1: BlockValue) -> Packet {
+    let mut packet = Packet::new();
+    packet.header.message_id = request.header.message_id;
+    packet.set_token(request.get_token().to_vec());
+    packet.header.code = MessageClass::Response(code);
+    packet.add_option_as(CoapOption::Block1, block1);
+    packet
 }
 
 pub fn packet_to_request(
     packet: &Packet,
-    _resource_path: &str,
+    resource_path: &str,
 ) -> std::result::Result<Request, Response> {
     let method = match packet.header.code {
         MessageClass::Request(RequestType::Get) => Method::Get,
@@ -355,34 +512,24 @@ pub fn packet_to_request(
     };
 
     let uri_path = uri_path(packet);
-    let trimmed = uri_path.trim_start_matches('/');
-
-    // Detect CORECONF interface from the first URI path segment (`c` or `s`).
-    // This works regardless of the configured resource_path — both /c and /s
-    // are always served.
-    let (remaining, interface) = if let Some((first, rest)) = trimmed.split_once('/') {
-        if let Some(iface) = Interface::from_uri_segment(first) {
-            (rest.to_string(), Some(iface))
+    let segments: Vec<&str> = uri_path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let resource_segments = resource_segments(resource_path);
+    let Some((interface, consumed)) = route_coreconf_path(&segments, &resource_segments) else {
+        let path = if uri_path.is_empty() {
+            "/".to_string()
         } else {
-            (trimmed.to_string(), None)
-        }
-    } else if let Some(iface) = Interface::from_uri_segment(trimmed) {
-        (String::new(), Some(iface))
-    } else {
-        (trimmed.to_string(), None)
+            format!("/{uri_path}")
+        };
+        return Err(Response::not_found(&path));
     };
 
-    let path = if remaining.is_empty() {
-        String::new()
-    } else {
-        format!("/{remaining}")
-    };
-
-    let mut request = Request::new(method).with_path(if path.is_empty() {
-        String::new()
-    } else {
-        format!("/{path}")
-    });
+    let path = path_from_segments(&segments, consumed);
+    let mut request =
+        Request::new(method).with_path(if path.is_empty() { String::new() } else { path });
     request.payload = packet.payload.clone();
     request.content_format = raw_content_format(packet)
         .and_then(|raw| content_format_from_raw(method, raw))
@@ -394,9 +541,7 @@ pub fn packet_to_request(
         .or_else(|| default_content_format(method, &request.payload));
     request.query = uri_query(packet);
 
-    if let Some(iface) = interface {
-        request.interface = Some(iface);
-    }
+    request.interface = Some(interface);
 
     // Parse CoAP Observe option.
     if let Some(Ok(observe_value)) = packet.get_observe_value() {
@@ -407,6 +552,61 @@ pub fn packet_to_request(
     request.token = packet.get_token().to_vec();
 
     Ok(request)
+}
+
+fn path_from_segments(segments: &[&str], consumed: usize) -> String {
+    let remaining = &segments[consumed..];
+    if remaining.is_empty() {
+        String::new()
+    } else {
+        format!("/{}", remaining.join("/"))
+    }
+}
+
+fn resource_segments(path: &str) -> Vec<&str> {
+    let segments: Vec<&str> = path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if segments.is_empty() {
+        vec!["c"]
+    } else {
+        segments
+    }
+}
+
+fn route_coreconf_path(segments: &[&str], resource: &[&str]) -> Option<(Interface, usize)> {
+    if resource == ["c"] {
+        match segments.first().copied() {
+            Some("c") => return Some((Interface::Management, 1)),
+            Some("s") => return Some((Interface::Streaming, 1)),
+            _ => return None,
+        }
+    }
+
+    if segments.len() < resource.len() || !segments.starts_with(resource) {
+        return None;
+    }
+
+    let mut consumed = resource.len();
+    let interface = if segments.get(consumed).copied() == Some("s") {
+        consumed += 1;
+        Interface::Streaming
+    } else {
+        Interface::Management
+    };
+    Some((interface, consumed))
+}
+
+fn advertised_paths(resource_path: &str) -> (String, String) {
+    let management_path = resource_segments(resource_path).join("/");
+    let streaming_path = if management_path == "c" {
+        "s".to_string()
+    } else {
+        format!("{management_path}/s")
+    };
+    (management_path, streaming_path)
 }
 
 pub fn response_to_packet(request: &Packet, response: Response) -> Packet {
@@ -590,6 +790,36 @@ fn invalid_data(message: String) -> CoreconfError {
 mod tests {
     use super::*;
 
+    fn request_packet(method: RequestType, path: &str) -> Packet {
+        let mut packet = Packet::new();
+        packet.header.code = MessageClass::Request(method);
+        add_uri_path(&mut packet, path);
+        packet
+    }
+
+    fn blockwise_ipatch_packet(path: &str, payload: Vec<u8>, num: usize, more: bool) -> Packet {
+        let mut packet = request_packet(RequestType::IPatch, path);
+        packet.set_token(vec![0x44]);
+        packet.payload = payload;
+        packet.set_content_format(content_format_to_coap(ContentFormat::YangDataCbor));
+        packet.add_option_as(CoapOption::Block1, BlockValue::new(num, more, 16).unwrap());
+        packet
+    }
+
+    fn small_model() -> CompositeModel {
+        CompositeModel::from_sid_strings(&[r#"{
+            "module-name":"example",
+            "module-revision":"2026-01-01",
+            "item":[
+                {"identifier":"example","sid":60000},
+                {"identifier":"/example:settings","sid":60001},
+                {"identifier":"/example:settings/text","sid":60002,"type":"string"}
+            ],
+            "key-mapping":{}
+        }"#])
+        .unwrap()
+    }
+
     #[test]
     fn maps_schc_management_content_format_by_method() {
         assert_eq!(
@@ -603,6 +833,96 @@ mod tests {
         assert_eq!(
             content_format_from_raw(Method::Post, SCHC_MANAGEMENT_CONTENT_FORMAT),
             Some(ContentFormat::YangInstancesCborSeq)
+        );
+    }
+
+    #[test]
+    fn packet_to_request_rejects_unknown_coreconf_root() {
+        let packet = request_packet(RequestType::Get, "/foo");
+
+        let error = packet_to_request(&packet, "c").unwrap_err();
+
+        assert_eq!(error.code, ResponseCode::NotFound);
+    }
+
+    #[test]
+    fn packet_to_request_maps_default_management_root() {
+        let packet = request_packet(RequestType::Get, "/c/example:settings");
+
+        let request = packet_to_request(&packet, "c").unwrap();
+
+        assert_eq!(request.interface, Some(Interface::Management));
+        assert_eq!(request.path, "/example:settings");
+    }
+
+    #[test]
+    fn packet_to_request_maps_default_streaming_root() {
+        let packet = request_packet(RequestType::Fetch, "/s/events");
+
+        let request = packet_to_request(&packet, "c").unwrap();
+
+        assert_eq!(request.interface, Some(Interface::Streaming));
+        assert_eq!(request.path, "/events");
+    }
+
+    #[test]
+    fn packet_to_request_honors_custom_management_root() {
+        let packet = request_packet(RequestType::Get, "/mgmt/example:settings");
+
+        let request = packet_to_request(&packet, "mgmt").unwrap();
+
+        assert_eq!(request.interface, Some(Interface::Management));
+        assert_eq!(request.path, "/example:settings");
+    }
+
+    #[test]
+    fn well_known_core_advertises_custom_resource_path() {
+        let handler = RequestHandler::new(crate::Datastore::new_in_memory(small_model()));
+        let server = CoapLiteServer::bind("127.0.0.1:0", "mgmt", handler).unwrap();
+        let request = request_packet(RequestType::Get, "/.well-known/core");
+
+        let response = server.well_known_core_response(&request);
+        let payload = String::from_utf8(response.payload).unwrap();
+
+        assert!(payload.contains("</mgmt>;rt=\"core.c.ds\""));
+        assert!(payload.contains("</mgmt/s>;rt=\"core.c.ev\""));
+    }
+
+    #[test]
+    fn handle_packet_reassembles_block1_ipatch_before_dispatch() {
+        let handler = RequestHandler::new(crate::Datastore::new_in_memory(small_model()));
+        let mut server = CoapLiteServer::bind("127.0.0.1:0", "c", handler).unwrap();
+        let peer: SocketAddr = "127.0.0.1:56830".parse().unwrap();
+        let value = serde_json::json!("abcdefghijklmnopqrstuvwxyz");
+        let mut payload = Vec::new();
+        ciborium::into_writer(&value, &mut payload).unwrap();
+        let (first, second) = payload.split_at(16);
+
+        let first_response = server.handle_packet(
+            &blockwise_ipatch_packet("/c/example:settings/text", first.to_vec(), 0, true),
+            peer,
+        );
+        assert!(matches!(
+            first_response.header.code,
+            MessageClass::Response(ResponseType::Continue)
+        ));
+
+        let second_response = server.handle_packet(
+            &blockwise_ipatch_packet("/c/example:settings/text", second.to_vec(), 1, false),
+            peer,
+        );
+
+        assert!(matches!(
+            second_response.header.code,
+            MessageClass::Response(ResponseType::Changed)
+        ));
+        assert_eq!(
+            server
+                .handler()
+                .datastore()
+                .get_path("/example:settings/text")
+                .unwrap(),
+            Some(value)
         );
     }
 }

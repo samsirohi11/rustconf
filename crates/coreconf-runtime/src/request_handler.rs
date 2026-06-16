@@ -345,7 +345,17 @@ impl RequestHandler {
                 );
             }
 
+            let parsed = match PredicatePath::parse(&request.path) {
+                Ok(parsed) => parsed,
+                Err(error) => return Response::error(ResponseCode::BadRequest, &error.to_string()),
+            };
+
             return match decode_json_value(&request.payload)
+                .and_then(|value| {
+                    self.datastore
+                        .model()
+                        .sid_value_to_identifier_value_at_path(value, &parsed.canonical_path)
+                })
                 .and_then(|value| self.datastore.set_path(&request.path, value))
             {
                 Ok(()) => {
@@ -368,6 +378,14 @@ impl RequestHandler {
 
         match decode_instances(&request.payload) {
             Ok(instances) => {
+                if instances.is_empty() {
+                    return Response::error(
+                        ResponseCode::BadRequest,
+                        "iPATCH contained no operations",
+                    );
+                }
+
+                let mut applied = 0usize;
                 for instance in instances {
                     let Some(sid) = instance.path.absolute_sid() else {
                         continue;
@@ -419,7 +437,16 @@ impl RequestHandler {
                         return Response::error(ResponseCode::Conflict, &error.to_string());
                     }
                     self.mark_changed(&xpath);
+                    applied += 1;
                 }
+
+                if applied == 0 {
+                    return Response::error(
+                        ResponseCode::BadRequest,
+                        "iPATCH contained no operations",
+                    );
+                }
+
                 Response::changed()
             }
             Err(error) => Response::error(ResponseCode::BadRequest, &error.to_string()),

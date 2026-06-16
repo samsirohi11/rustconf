@@ -27,6 +27,11 @@ impl Datastore {
         Ok(Self::with_data(model, data))
     }
 
+    pub fn from_json_with_model(model: CompositeModel, json: &str) -> Result<Self> {
+        let data: Value = serde_json::from_str(json)?;
+        Ok(Self::with_backend(model, MemoryBackend::new(data)))
+    }
+
     /// Build a datastore from a CORECONF CBOR payload (e.g. a FETCH or GET
     /// response).  Decodes the SID-keyed CBOR into an identifier-keyed JSON
     /// tree and populates the datastore.  Used during device bootstrap and

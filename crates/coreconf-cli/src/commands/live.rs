@@ -1,12 +1,12 @@
 use clap::Args;
 use coreconf_runtime::transport::coap_lite::CoapLiteClient;
-use rustyline::Editor;
 use rustyline::error::ReadlineError;
+use rustyline::Editor;
 
-use crate::CliError;
 use crate::commands::shell::changes_to_text;
 use crate::complete::CoreconfCompleter;
 use crate::session::LiveSession;
+use crate::CliError;
 
 /// Start an interactive live CORECONF session against a remote CoAP server.
 #[derive(Args)]
@@ -33,9 +33,10 @@ pub fn run(args: LiveArgs) -> Result<(), CliError> {
 
     eprintln!("Connected to coap://{}/{}", args.server, args.path);
 
-    let mut session = LiveSession::new(model, client)?;
+    let mut session = LiveSession::empty(model, client);
 
-    eprintln!("Commands: get <path>, set <path> <json-value>, delete <path>, push, reload, quit");
+    eprintln!("Commands: discover [d=0], get <path>, set <path> <json-value>, delete <path>, push, reload, quit");
+    eprintln!("No startup GET was sent; run `discover d=0` or `reload` when needed.");
     eprintln!("Tab-complete: commands and model paths");
     eprintln!();
 
@@ -66,7 +67,10 @@ pub fn run(args: LiveArgs) -> Result<(), CliError> {
                     "help" | "?" => {
                         eprintln!("Commands:");
                         eprintln!(
-                            "  get <path>                 read a value from the remote server"
+                            "  discover [d=0]            discover server resources without GET /c"
+                        );
+                        eprintln!(
+                            "  get <path>                 read a value from the local working copy"
                         );
                         eprintln!("  set <path> <json-value>    stage a change");
                         eprintln!("  delete <path>              stage a deletion");
@@ -80,13 +84,21 @@ pub fn run(args: LiveArgs) -> Result<(), CliError> {
 
                     "quit" | "exit" | "q" => return Ok(()),
 
+                    "discover" => (|| -> Result<(), CliError> {
+                        let query = parts.next().unwrap_or("d=0");
+                        println!("{}", session.discover(Some(query))?);
+                        Ok(())
+                    })(),
+
                     "get" => (|| -> Result<(), CliError> {
                         let path = required(parts.next(), "usage: get <path>")?;
                         match session.get(path)? {
                             Some(value) => {
                                 println!("{}", serde_json::to_string_pretty(&value)?)
                             }
-                            None => eprintln!("(not found)"),
+                            None => eprintln!(
+                                "(not found; run `reload` first if you need a remote snapshot)"
+                            ),
                         }
                         Ok(())
                     })(),

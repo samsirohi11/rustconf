@@ -43,13 +43,31 @@ fn split_segments(input: &str) -> Result<Vec<String>> {
     let mut segments = Vec::new();
     let mut current = String::new();
     let mut bracket_depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
 
     for ch in input.chars() {
+        if let Some(active_quote) = quote {
+            current.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+
         match ch {
             '/' if bracket_depth == 0 => {
                 if !current.is_empty() {
                     segments.push(std::mem::take(&mut current));
                 }
+            }
+            '\'' | '"' if bracket_depth > 0 => {
+                quote = Some(ch);
+                current.push(ch);
             }
             '[' => {
                 bracket_depth += 1;
@@ -66,6 +84,12 @@ fn split_segments(input: &str) -> Result<Vec<String>> {
             }
             _ => current.push(ch),
         }
+    }
+
+    if quote.is_some() {
+        return Err(CoreconfError::ValidationError(format!(
+            "unterminated quoted predicate value in path '{input}'"
+        )));
     }
 
     if bracket_depth != 0 {
@@ -102,7 +126,23 @@ fn parse_segment(segment: &str) -> Result<(String, Vec<(String, String)>)> {
         index += 1;
 
         let predicate_start = index;
-        while index < chars.len() && chars[index] != ']' {
+        let mut quote = None;
+        let mut escaped = false;
+        while index < chars.len() {
+            let ch = chars[index];
+            if let Some(active_quote) = quote {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == active_quote {
+                    quote = None;
+                }
+            } else if ch == '\'' || ch == '"' {
+                quote = Some(ch);
+            } else if ch == ']' {
+                break;
+            }
             index += 1;
         }
         if index >= chars.len() {
@@ -141,6 +181,30 @@ fn parse_predicate(predicate: &str) -> Result<(String, String)> {
 
     Ok((
         name.trim().to_string(),
-        value[1..value.len() - 1].to_string(),
+        unescape_predicate_value(&value[1..value.len() - 1])?,
     ))
+}
+
+fn unescape_predicate_value(value: &str) -> Result<String> {
+    let mut unescaped = String::with_capacity(value.len());
+    let mut escaped = false;
+
+    for ch in value.chars() {
+        if escaped {
+            unescaped.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else {
+            unescaped.push(ch);
+        }
+    }
+
+    if escaped {
+        return Err(CoreconfError::ValidationError(
+            "predicate value ends with unfinished escape".into(),
+        ));
+    }
+
+    Ok(unescaped)
 }

@@ -1,7 +1,7 @@
 use coreconf_model::{CompositeModel, CoreconfError};
 use coreconf_runtime::transport::coap_lite::CoreconfClient;
 use coreconf_runtime::{
-    Backend, Datastore, EditableFormat, FileBackend, encode_editable_value, read_editable_file,
+    encode_editable_value, read_editable_file, Backend, Datastore, EditableFormat, FileBackend,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -230,6 +230,17 @@ impl<C: CoreconfClient> LiveSession<C> {
         Ok(Self::from_snapshot(model, client, snapshot))
     }
 
+    /// Start a live session without issuing a startup GET. The working copy is
+    /// empty until the operator explicitly runs `reload` or stages edits.
+    pub fn empty(model: CompositeModel, client: C) -> Self {
+        Self::from_snapshot(model, client, Value::Object(Default::default()))
+    }
+
+    /// Run CoRE resource discovery without fetching the CORECONF datastore.
+    pub fn discover(&mut self, query: Option<&str>) -> Result<String, CliError> {
+        self.client.discover(query).map_err(CliError::Model)
+    }
+
     /// Start a live session from an already-fetched snapshot.
     pub fn from_snapshot(model: CompositeModel, client: C, snapshot: Value) -> Self {
         let working_copy = Datastore::with_backend(
@@ -266,13 +277,40 @@ impl<C: CoreconfClient> LiveSession<C> {
     }
 
     pub fn set(&mut self, path: &str, value: Value) -> Result<(), CliError> {
+        self.seed_path_from_remote(path)?;
         self.working_copy
             .set_path(path, value)
             .map_err(CliError::Model)
     }
 
     pub fn delete(&mut self, path: &str) -> Result<bool, CliError> {
+        self.seed_path_from_remote(path)?;
         self.working_copy.delete_path(path).map_err(CliError::Model)
+    }
+
+    fn seed_path_from_remote(&mut self, path: &str) -> Result<(), CliError> {
+        if self
+            .working_copy
+            .get_path(path)
+            .map_err(CliError::Model)?
+            .is_some()
+        {
+            return Ok(());
+        }
+        let Some(remote_value) = self.client.fetch_path(path).map_err(CliError::Model)? else {
+            return Ok(());
+        };
+
+        let mut base = Datastore::with_backend(
+            self.model.clone(),
+            coreconf_runtime::MemoryBackend::new(self.base_snapshot.clone()),
+        );
+        base.set_path(path, remote_value.clone())
+            .map_err(CliError::Model)?;
+        self.base_snapshot = base.get_all();
+        self.working_copy
+            .set_path(path, remote_value)
+            .map_err(CliError::Model)
     }
 
     pub fn pending_patch(&self) -> Result<Vec<(String, Option<Value>)>, CliError> {

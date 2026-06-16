@@ -416,8 +416,19 @@ fn diff_value_changes(
             }
         }
         _ => {
-            lines.push(style_red(&format!("  - {}", format_value(model, before))));
-            lines.push(style_green(&format!("  + {}", format_value(model, after))));
+            if prefix.is_empty() {
+                lines.push(style_red(&format!("  - {}", format_value(model, before))));
+                lines.push(style_green(&format!("  + {}", format_value(model, after))));
+            } else {
+                lines.push(style_red(&format!(
+                    "  - {prefix}: {}",
+                    format_value(model, before)
+                )));
+                lines.push(style_green(&format!(
+                    "  + {prefix}: {}",
+                    format_value(model, after)
+                )));
+            }
         }
     }
     lines

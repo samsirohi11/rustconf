@@ -7,13 +7,14 @@
 
 use clap::Args;
 use std::io::{self, Write};
+use std::net::IpAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use coap_lite::{CoapOption, MessageClass, Packet, ResponseType};
-use coreconf_model::CoreconfModel;
 use coreconf_runtime::transport::coap_lite::CoapLiteServer;
 use coreconf_runtime::{Datastore, RequestHandler};
 
@@ -34,6 +35,14 @@ pub struct ServeArgs {
     #[arg(long, default_value = "5683")]
     pub port: u16,
 
+    /// IP address to bind. Defaults to loopback for safe local demos.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub bind: String,
+
+    /// Permit binding to non-loopback addresses.
+    #[arg(long, default_value_t = false)]
+    pub allow_remote: bool,
+
     /// CORECONF resource path (URI segment before sub-paths)
     #[arg(long, default_value = "c")]
     pub path: String,
@@ -45,21 +54,25 @@ pub struct ServeArgs {
 
 pub fn run(args: ServeArgs) -> Result<(), CliError> {
     let model = crate::load_model(&args.sid)?;
-    let coreconf_model = CoreconfModel::new(&args.sid[0]).map_err(CliError::Model)?;
 
     let datastore = if let Some(ref data_path) = args.data {
         let json_str = std::fs::read_to_string(data_path).map_err(CliError::Io)?;
-        Datastore::from_json(coreconf_model.clone(), &json_str).map_err(CliError::Model)?
+        Datastore::from_json_with_model(model.clone(), &json_str).map_err(CliError::Model)?
     } else {
         Datastore::new_in_memory(model.clone())
     };
 
-    let bind_addr = format!("0.0.0.0:{}", args.port);
+    let bind_addr = bind_addr(&args.bind, args.port, args.allow_remote)?;
     let handler = RequestHandler::new(datastore);
     let mut server =
         CoapLiteServer::bind(&bind_addr, &args.path, handler).map_err(CliError::Model)?;
 
-    eprintln!("CORECONF server listening on coap://0.0.0.0:{}", args.port);
+    eprintln!("CORECONF server listening on coap://{}", bind_addr);
+    if args.allow_remote && !is_loopback_host(&args.bind) {
+        eprintln!(
+            "WARNING: --allow-remote exposes this demo server without authentication; use only on trusted networks."
+        );
+    }
     eprintln!("  Datastore resource: /{}", args.path);
     if let Some(ref dp) = args.data {
         let out = dp.with_extension("modified.json");
@@ -187,4 +200,52 @@ pub fn run(args: ServeArgs) -> Result<(), CliError> {
 
     eprintln!("Server stopped.");
     Ok(())
+}
+
+fn bind_addr(bind: &str, port: u16, allow_remote: bool) -> Result<String, CliError> {
+    if !allow_remote && !is_loopback_host(bind) {
+        return Err(CliError::InvalidInput(format!(
+            "refusing non-loopback bind address '{bind}'; pass --allow-remote to expose the demo server"
+        )));
+    }
+
+    if bind.contains(':') && !bind.starts_with('[') {
+        Ok(format!("[{bind}]:{port}"))
+    } else {
+        Ok(format!("{bind}:{port}"))
+    }
+}
+
+fn is_loopback_host(bind: &str) -> bool {
+    if bind.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+
+    let trimmed = bind.trim_matches(['[', ']']);
+    IpAddr::from_str(trimmed).is_ok_and(|ip| ip.is_loopback())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bind_addr_defaults_to_loopback_without_remote_flag() {
+        assert_eq!(
+            bind_addr("127.0.0.1", 5683, false).unwrap(),
+            "127.0.0.1:5683"
+        );
+    }
+
+    #[test]
+    fn bind_addr_rejects_non_loopback_without_remote_flag() {
+        let error = bind_addr("0.0.0.0", 5683, false).unwrap_err();
+
+        assert!(error.to_string().contains("--allow-remote"));
+    }
+
+    #[test]
+    fn bind_addr_accepts_non_loopback_with_remote_flag() {
+        assert_eq!(bind_addr("0.0.0.0", 5683, true).unwrap(), "0.0.0.0:5683");
+    }
 }

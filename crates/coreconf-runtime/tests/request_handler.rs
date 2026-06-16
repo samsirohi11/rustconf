@@ -11,6 +11,17 @@ fn encode_value(value: &serde_json::Value) -> Vec<u8> {
     bytes
 }
 
+fn encode_sid_value_at_path(
+    model: &CompositeModel,
+    canonical_path: &str,
+    value: serde_json::Value,
+) -> Vec<u8> {
+    let sid_value = model
+        .identifier_value_to_sid_value_at_path(value, canonical_path)
+        .unwrap();
+    encode_value(&sid_value)
+}
+
 fn decode_value(bytes: &[u8]) -> serde_json::Value {
     coreconf_model::codec::cbor_to_json_value(bytes).unwrap()
 }
@@ -25,7 +36,9 @@ fn runtime_model() -> CompositeModel {
             {"identifier":"/example:devices/device","sid":60002},
             {"identifier":"/example:devices/device/id","sid":60003,"type":"string"},
             {"identifier":"/example:devices/device/enabled","sid":60004,"type":"boolean"},
-            {"identifier":"/example:devices/device/reset","sid":60005}
+            {"identifier":"/example:devices/device/reset","sid":60005},
+            {"identifier":"/example:settings","sid":60006},
+            {"identifier":"/example:settings/enabled","sid":60007,"type":"boolean"}
         ],
         "key-mapping":{"60002":[60003]}
     }"#])
@@ -66,6 +79,83 @@ fn request_handler_applies_ipatch_to_predicate_path() {
         handler
             .datastore()
             .get_path("/example:devices/device[id='rdc-1']/enabled")
+            .unwrap(),
+        Some(json!(true))
+    );
+}
+
+#[test]
+fn request_handler_decodes_path_ipatch_sid_object_before_storing() {
+    let model = runtime_model();
+    let datastore = Datastore::new_in_memory(model.clone());
+    let mut handler = RequestHandler::new(datastore);
+
+    let request = Request::new(Method::IPatch)
+        .with_path("/example:devices/device[id='rdc-1']")
+        .with_payload(
+            encode_sid_value_at_path(&model, "/example:devices/device", json!({"enabled": true})),
+            ContentFormat::YangDataCbor,
+        );
+
+    let response = handler.handle(&request);
+
+    assert_eq!(response.code, ResponseCode::Changed);
+    assert_eq!(
+        handler
+            .datastore()
+            .get_path("/example:devices/device[id='rdc-1']/enabled")
+            .unwrap(),
+        Some(json!(true))
+    );
+}
+
+#[test]
+fn request_handler_rejects_scalar_root_ipatch_payload() {
+    let datastore = Datastore::new_in_memory(runtime_model());
+    let mut handler = RequestHandler::new(datastore);
+
+    let request = Request::new(Method::IPatch).with_payload(
+        encode_value(&json!(true)),
+        ContentFormat::YangInstancesCborSeq,
+    );
+
+    let response = handler.handle(&request);
+
+    assert_eq!(response.code, ResponseCode::BadRequest);
+}
+
+#[test]
+fn request_handler_rejects_empty_root_ipatch_payload() {
+    let datastore = Datastore::new_in_memory(runtime_model());
+    let mut handler = RequestHandler::new(datastore);
+
+    let request = Request::new(Method::IPatch).with_payload(
+        encode_value(&json!({})),
+        ContentFormat::YangInstancesCborSeq,
+    );
+
+    let response = handler.handle(&request);
+
+    assert_eq!(response.code, ResponseCode::BadRequest);
+}
+
+#[test]
+fn request_handler_applies_valid_root_ipatch_instance() {
+    let datastore = Datastore::new_in_memory(runtime_model());
+    let mut handler = RequestHandler::new(datastore);
+
+    let request = Request::new(Method::IPatch).with_payload(
+        encode_value(&json!({"60007": true})),
+        ContentFormat::YangInstancesCborSeq,
+    );
+
+    let response = handler.handle(&request);
+
+    assert_eq!(response.code, ResponseCode::Changed);
+    assert_eq!(
+        handler
+            .datastore()
+            .get_path("/example:settings/enabled")
             .unwrap(),
         Some(json!(true))
     );

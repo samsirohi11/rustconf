@@ -10,6 +10,22 @@ fn predicate_path_parse_extracts_canonical_path_and_predicates() {
 }
 
 #[test]
+fn predicate_path_parse_accepts_brackets_inside_quoted_values() {
+    let parsed = PredicatePath::parse("/example:devices/device[id='rack]42']/enabled").unwrap();
+
+    assert_eq!(parsed.canonical_path, "/example:devices/device/enabled");
+    assert_eq!(parsed.predicates, vec![("id".into(), "rack]42".into())]);
+}
+
+#[test]
+fn predicate_path_parse_unescapes_quotes_inside_values() {
+    let parsed = PredicatePath::parse("/example:devices/device[id='rack\\'42']/enabled").unwrap();
+
+    assert_eq!(parsed.canonical_path, "/example:devices/device/enabled");
+    assert_eq!(parsed.predicates, vec![("id".into(), "rack'42".into())]);
+}
+
+#[test]
 fn datastore_reads_and_writes_predicate_paths() {
     let model = CompositeModel::from_sid_strings(&[r#"{
         "module-name":"example",
