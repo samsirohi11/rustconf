@@ -1,12 +1,12 @@
 use clap::Args;
 use coreconf_runtime::transport::coap_lite::CoapLiteClient;
-use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use rustyline::error::ReadlineError;
 
+use crate::CliError;
 use crate::commands::shell::changes_to_text;
 use crate::complete::CoreconfCompleter;
 use crate::session::LiveSession;
-use crate::CliError;
 
 /// Start an interactive live CORECONF session against a remote CoAP server.
 #[derive(Args)]
@@ -35,7 +35,9 @@ pub fn run(args: LiveArgs) -> Result<(), CliError> {
 
     let mut session = LiveSession::empty(model, client);
 
-    eprintln!("Commands: discover [d=0], get <path>, set <path> <json-value>, delete <path>, push, reload, quit");
+    eprintln!(
+        "Commands: discover [d=0], get <path>, set <path> <json-value>, delete <path>, push, reload, quit"
+    );
     eprintln!("No startup GET was sent; run `discover d=0` or `reload` when needed.");
     eprintln!("Tab-complete: commands and model paths");
     eprintln!();
