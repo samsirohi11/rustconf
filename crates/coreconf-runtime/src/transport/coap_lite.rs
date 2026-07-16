@@ -12,7 +12,6 @@ use serde_json::Value;
 
 use crate::coap_types::{
     ContentFormat, Interface, Method, QueryParams, Request, Response, ResponseCode,
-    SCHC_MANAGEMENT_CONTENT_FORMAT,
 };
 use crate::request_handler::RequestHandler;
 
@@ -531,14 +530,14 @@ pub fn packet_to_request(
     let mut request =
         Request::new(method).with_path(if path.is_empty() { String::new() } else { path });
     request.payload = packet.payload.clone();
-    request.content_format = raw_content_format(packet)
-        .and_then(|raw| content_format_from_raw(method, raw))
-        .or_else(|| {
-            packet
-                .get_content_format()
-                .and_then(|format| content_format_from_coap(method, format))
-        })
-        .or_else(|| default_content_format(method, &request.payload));
+    request.raw_content_format = raw_content_format(packet);
+    request.content_format = match request.raw_content_format {
+        Some(raw) => content_format_from_raw(method, raw),
+        None => packet
+            .get_content_format()
+            .and_then(|format| content_format_from_coap(method, format))
+            .or_else(|| default_content_format(method, &request.payload)),
+    };
     request.query = uri_query(packet);
 
     request.interface = Some(interface);
@@ -681,30 +680,25 @@ fn default_content_format(method: Method, payload: &[u8]) -> Option<ContentForma
 fn raw_content_format(packet: &Packet) -> Option<u16> {
     let raw = packet.get_option(CoapOption::ContentFormat)?;
     let bytes = raw.front()?;
-    if bytes.len() == 1 {
+    if bytes.is_empty() {
+        Some(0)
+    } else if bytes.len() == 1 {
         Some(u16::from(bytes[0]))
-    } else if bytes.len() >= 2 {
+    } else if bytes.len() == 2 {
         Some(u16::from_be_bytes([bytes[0], bytes[1]]))
     } else {
         None
     }
 }
 
-/// Map a raw content-format number (RFC 9595 / IANA registry) to a `ContentFormat`.
+/// Map a raw content-format number to a known semantic `ContentFormat`.
 ///
-/// Handles both the RFC-defined CORECONF formats used by aiocoap and the
-/// coap-lite generic formats.  Prioritises raw numbers over the enum so that
-/// clients sending RFC-compliant format numbers (e.g. 141 for
-/// yang-identifiers+cbor) are recognised correctly.
+/// Known CORECONF values retain their method-specific interpretation.  An
+/// unknown raw value deliberately remains semantically unrecognised.
 fn content_format_from_raw(method: Method, raw: u16) -> Option<ContentFormat> {
     match (method, raw) {
-        // SCHC CORECONF M-rules use a dedicated management payload
-        // content-format. Preserve the method semantics expected by the
-        // runtime handlers.
-        (Method::Fetch, SCHC_MANAGEMENT_CONTENT_FORMAT) => Some(ContentFormat::YangIdentifiersCbor),
-        (Method::IPatch, SCHC_MANAGEMENT_CONTENT_FORMAT) => Some(ContentFormat::YangDataCbor),
-        (Method::Post, SCHC_MANAGEMENT_CONTENT_FORMAT) => Some(ContentFormat::YangInstancesCborSeq),
-        // RFC 9595 CORECONF content-formats
+        (Method::Fetch, 60) => Some(ContentFormat::YangIdentifiersCbor),
+        (_, 60) => Some(ContentFormat::YangDataCbor),
         (Method::Fetch, 141) => Some(ContentFormat::YangIdentifiersCbor),
         (_, 141) => Some(ContentFormat::YangDataCbor),
         (_, 142) | (_, 140) => Some(ContentFormat::YangDataCbor),
@@ -717,8 +711,8 @@ fn content_format_to_coap(format: ContentFormat) -> CoapContentFormat {
     // Use RFC 9595 format numbers when available; fall back to coap-lite
     // generics for broader compatibility.
     match format {
-        ContentFormat::YangDataCbor => CoapContentFormat::ApplicationYangDataCbor, // 142
-        ContentFormat::YangIdentifiersCbor => CoapContentFormat::ApplicationCBOR, // 60 (no RFC-specific variant in coap-lite)
+        ContentFormat::YangDataCbor => CoapContentFormat::ApplicationYangDataCborSid, // 140
+        ContentFormat::YangIdentifiersCbor => CoapContentFormat::ApplicationCBOR,     // 60
         ContentFormat::YangInstancesCborSeq => CoapContentFormat::ApplicationCborSeq, // 63
     }
 }
@@ -821,18 +815,97 @@ mod tests {
     }
 
     #[test]
-    fn maps_schc_management_content_format_by_method() {
+    fn unknown_raw_content_format_is_preserved_without_semantic_default() {
+        let mut packet = request_packet(RequestType::IPatch, "/c/example:settings");
+        packet.payload = vec![0xa0];
+        packet.add_option(CoapOption::ContentFormat, vec![0xf1, 0x23]);
+
+        let request = packet_to_request(&packet, "c").unwrap();
+
+        assert_eq!(request.raw_content_format, Some(0xf123));
+        assert_eq!(request.content_format, None);
+    }
+
+    #[test]
+    fn explicit_raw_coap_enum_value_does_not_use_enum_fallback() {
+        let mut packet = request_packet(RequestType::IPatch, "/c/example:settings");
+        packet.payload = vec![0xa0];
+        packet.add_option(CoapOption::ContentFormat, vec![0x01, 0x54]);
+
+        let request = packet_to_request(&packet, "c").unwrap();
+
+        assert_eq!(request.raw_content_format, Some(340));
+        assert_eq!(request.content_format, None);
+    }
+
+    #[test]
+    fn raw_application_cbor_keeps_method_specific_semantics() {
+        for (method, expected) in [
+            (RequestType::Fetch, ContentFormat::YangIdentifiersCbor),
+            (RequestType::IPatch, ContentFormat::YangDataCbor),
+            (RequestType::Post, ContentFormat::YangDataCbor),
+        ] {
+            let mut packet = request_packet(method, "/c");
+            packet.payload = vec![0xa0];
+            packet.add_option(CoapOption::ContentFormat, vec![60]);
+
+            let request = packet_to_request(&packet, "c").unwrap();
+
+            assert_eq!(request.raw_content_format, Some(60));
+            assert_eq!(request.content_format, Some(expected));
+        }
+    }
+
+    #[test]
+    fn standard_content_format_preserves_raw_value_and_semantics() {
+        let mut packet = request_packet(RequestType::Fetch, "/c");
+        packet.payload = vec![0xa0];
+        packet.add_option(CoapOption::ContentFormat, vec![0x8d]);
+
+        let request = packet_to_request(&packet, "c").unwrap();
+
+        assert_eq!(request.raw_content_format, Some(141));
         assert_eq!(
-            content_format_from_raw(Method::Fetch, SCHC_MANAGEMENT_CONTENT_FORMAT),
+            request.content_format,
             Some(ContentFormat::YangIdentifiersCbor)
         );
+    }
+
+    #[test]
+    fn request_payload_builder_records_standard_raw_content_format() {
+        let request =
+            Request::new(Method::IPatch).with_payload(vec![0xa0], ContentFormat::YangDataCbor);
+
+        assert_eq!(request.raw_content_format, Some(142));
+        assert_eq!(request.content_format, Some(ContentFormat::YangDataCbor));
+    }
+
+    #[test]
+    fn unknown_raw_root_ipatch_cannot_reach_handler() {
+        let handler = RequestHandler::new(crate::Datastore::new_in_memory(small_model()));
+        let mut server = CoapLiteServer::bind("127.0.0.1:0", "c", handler).unwrap();
+        let peer: SocketAddr = "127.0.0.1:56831".parse().unwrap();
+        let mut packet = request_packet(RequestType::IPatch, "/c");
+        packet.payload = {
+            let mut payload = Vec::new();
+            ciborium::into_writer(&serde_json::json!({"60002": "changed"}), &mut payload).unwrap();
+            payload
+        };
+        packet.add_option(CoapOption::ContentFormat, vec![0xf1, 0x23]);
+
+        let response = server.handle_packet(&packet, peer);
+
+        assert!(matches!(
+            response.header.code,
+            MessageClass::Response(ResponseType::UnsupportedContentFormat)
+        ));
         assert_eq!(
-            content_format_from_raw(Method::IPatch, SCHC_MANAGEMENT_CONTENT_FORMAT),
-            Some(ContentFormat::YangDataCbor)
-        );
-        assert_eq!(
-            content_format_from_raw(Method::Post, SCHC_MANAGEMENT_CONTENT_FORMAT),
-            Some(ContentFormat::YangInstancesCborSeq)
+            server
+                .handler()
+                .datastore()
+                .get_path("/example:settings/text")
+                .unwrap(),
+            None
         );
     }
 
@@ -911,7 +984,6 @@ mod tests {
             &blockwise_ipatch_packet("/c/example:settings/text", second.to_vec(), 1, false),
             peer,
         );
-
         assert!(matches!(
             second_response.header.code,
             MessageClass::Response(ResponseType::Changed)

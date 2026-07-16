@@ -2,7 +2,10 @@ use std::sync::{Arc, Mutex};
 
 use coreconf_model::CompositeModel;
 use coreconf_runtime::coap_types::{ContentFormat, Method, Request, ResponseCode};
-use coreconf_runtime::{Datastore, OperationBinding, OperationRegistry, RequestHandler};
+use coreconf_runtime::{
+    Backend, Datastore, OperationBinding, OperationRegistry, RequestHandler, TransactionContext,
+    TransactionParticipant,
+};
 use serde_json::json;
 
 fn encode_value(value: &serde_json::Value) -> Vec<u8> {
@@ -239,4 +242,224 @@ fn request_handler_delete_missing_path_returns_not_found() {
     let response = handler.handle(&request);
 
     assert_eq!(response.code, ResponseCode::NotFound);
+}
+
+#[derive(Clone)]
+struct RecordingBackend {
+    tree: serde_json::Value,
+    replacements: Arc<Mutex<Vec<serde_json::Value>>>,
+    fail: bool,
+}
+
+impl Backend for RecordingBackend {
+    fn read_tree(&self) -> serde_json::Value {
+        self.tree.clone()
+    }
+
+    fn replace_tree(&mut self, next: serde_json::Value) -> coreconf_model::Result<()> {
+        self.replacements.lock().unwrap().push(next.clone());
+        if self.fail {
+            return Err(coreconf_model::CoreconfError::Io(std::io::Error::other(
+                "publication failed",
+            )));
+        }
+        self.tree = next;
+        Ok(())
+    }
+}
+
+struct RecordingParticipant {
+    events: Arc<Mutex<Vec<String>>>,
+    reject: bool,
+}
+
+impl TransactionParticipant for RecordingParticipant {
+    fn pre_commit(&self, context: &TransactionContext<'_>) -> coreconf_model::Result<()> {
+        self.events.lock().unwrap().push(format!(
+            "validate:{:?}:{:?}:{:?}:{:?}",
+            context.request().method,
+            context.previous_tree(),
+            context.candidate_tree(),
+            context.changed_paths()
+        ));
+        if self.reject {
+            Err(coreconf_model::CoreconfError::ValidationError(
+                "candidate rejected".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn post_commit(&self, context: &TransactionContext<'_>) {
+        self.events.lock().unwrap().push(format!(
+            "post:{:?}:{:?}:{:?}:{:?}",
+            context.request().method,
+            context.previous_tree(),
+            context.candidate_tree(),
+            context.changed_paths()
+        ));
+    }
+}
+
+fn root_ipatch_request(payload: Vec<u8>) -> Request {
+    Request::new(Method::IPatch).with_payload(payload, ContentFormat::YangInstancesCborSeq)
+}
+
+fn unknown_raw_request(method: Method, payload: Vec<u8>) -> Request {
+    let mut request = Request::new(method);
+    request.payload = payload;
+    request.raw_content_format = Some(0xf123);
+    request
+}
+
+fn root_ipatch_payload(values: &[serde_json::Value]) -> Vec<u8> {
+    let mut payload = Vec::new();
+    for value in values {
+        payload.extend(encode_value(value));
+    }
+    payload
+}
+
+#[test]
+fn unknown_raw_root_ipatch_is_rejected_before_commit() {
+    let mut handler = RequestHandler::new(Datastore::new_in_memory(runtime_model()));
+    let request = unknown_raw_request(
+        Method::IPatch,
+        root_ipatch_payload(&[json!({"60007": true})]),
+    );
+
+    let response = handler.handle(&request);
+
+    assert_eq!(response.code, ResponseCode::UnsupportedContentFormat);
+    assert_eq!(handler.datastore().get_all(), json!({}));
+}
+
+#[test]
+fn unknown_raw_fetch_and_post_are_rejected_before_dispatch() {
+    let mut handler = RequestHandler::new(Datastore::new_in_memory(runtime_model()));
+
+    let fetch = handler.handle(&unknown_raw_request(
+        Method::Fetch,
+        encode_value(&json!(60007)),
+    ));
+    assert_eq!(fetch.code, ResponseCode::UnsupportedContentFormat);
+
+    let post = handler.handle(&unknown_raw_request(
+        Method::Post,
+        root_ipatch_payload(&[json!({"60005": null})]),
+    ));
+    assert_eq!(post.code, ResponseCode::UnsupportedContentFormat);
+    assert_eq!(handler.datastore().get_all(), json!({}));
+}
+
+#[test]
+fn root_ipatch_success_publishes_complete_candidate_and_notifies_in_order() {
+    let replacements = Arc::new(Mutex::new(Vec::new()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let backend = RecordingBackend {
+        tree: json!({}),
+        replacements: Arc::clone(&replacements),
+        fail: false,
+    };
+    let mut handler = RequestHandler::new(Datastore::with_backend(runtime_model(), backend));
+    handler.register_transaction_participant(Box::new(RecordingParticipant {
+        events: Arc::clone(&events),
+        reject: false,
+    }));
+    handler.register_transaction_participant(Box::new(RecordingParticipant {
+        events: Arc::clone(&events),
+        reject: false,
+    }));
+
+    let response = handler.handle(&root_ipatch_request(root_ipatch_payload(&[
+        json!({"60007": true}),
+        json!({"60007": false}),
+    ])));
+
+    assert_eq!(response.code, ResponseCode::Changed);
+    assert_eq!(replacements.lock().unwrap().len(), 1);
+    assert_eq!(
+        handler
+            .datastore()
+            .get_path("/example:settings/enabled")
+            .unwrap(),
+        Some(json!(false))
+    );
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 4);
+    assert!(events[0].starts_with("validate:IPatch:"));
+    assert!(events[1].starts_with("validate:IPatch:"));
+    assert!(events[2].starts_with("post:IPatch:"));
+    assert!(events[3].starts_with("post:IPatch:"));
+    assert!(events[2].contains("false"));
+    assert_eq!(events[2].matches("/example:settings/enabled").count(), 1);
+}
+
+#[test]
+fn root_ipatch_late_edit_is_atomic_and_does_not_dirty_observers() {
+    let mut handler = RequestHandler::new(Datastore::new_in_memory(runtime_model()));
+    handler.register_observer(vec![1], ["60007".to_string()].into_iter().collect());
+
+    let response = handler.handle(&root_ipatch_request(root_ipatch_payload(&[
+        json!({"60007": true}),
+        json!({"69999": false}),
+    ])));
+
+    assert_eq!(response.code, ResponseCode::Conflict);
+    assert_eq!(handler.datastore().get_all(), json!({}));
+    assert!(handler.pending_notifications(&[1]).is_empty());
+}
+
+#[test]
+fn root_ipatch_validator_rejection_does_not_publish_or_notify() {
+    let replacements = Arc::new(Mutex::new(Vec::new()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let backend = RecordingBackend {
+        tree: json!({}),
+        replacements: Arc::clone(&replacements),
+        fail: false,
+    };
+    let mut handler = RequestHandler::new(Datastore::with_backend(runtime_model(), backend));
+    handler.register_observer(vec![2], ["60007".to_string()].into_iter().collect());
+    handler.register_transaction_participant(Box::new(RecordingParticipant {
+        events: Arc::clone(&events),
+        reject: true,
+    }));
+
+    let response = handler.handle(&root_ipatch_request(root_ipatch_payload(&[
+        json!({"60007": true}),
+    ])));
+
+    assert_eq!(response.code, ResponseCode::Conflict);
+    assert!(replacements.lock().unwrap().is_empty());
+    assert_eq!(handler.datastore().get_all(), json!({}));
+    assert!(handler.pending_notifications(&[2]).is_empty());
+    assert_eq!(events.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn root_ipatch_publication_failure_has_no_post_commit_or_dirty_resources() {
+    let replacements = Arc::new(Mutex::new(Vec::new()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let backend = RecordingBackend {
+        tree: json!({}),
+        replacements: Arc::clone(&replacements),
+        fail: true,
+    };
+    let mut handler = RequestHandler::new(Datastore::with_backend(runtime_model(), backend));
+    handler.register_observer(vec![3], ["60007".to_string()].into_iter().collect());
+    handler.register_transaction_participant(Box::new(RecordingParticipant {
+        events: Arc::clone(&events),
+        reject: false,
+    }));
+
+    let response = handler.handle(&root_ipatch_request(root_ipatch_payload(&[
+        json!({"60007": true}),
+    ])));
+
+    assert_eq!(response.code, ResponseCode::InternalServerError);
+    assert_eq!(replacements.lock().unwrap().len(), 1);
+    assert_eq!(events.lock().unwrap().len(), 1);
+    assert!(handler.pending_notifications(&[3]).is_empty());
 }

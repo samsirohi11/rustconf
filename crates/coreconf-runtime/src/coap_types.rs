@@ -27,14 +27,6 @@ impl Interface {
     }
 }
 
-/// SCHC-CORECONF management payload content-format used by the integrated
-/// SCHC rule-management profile.
-///
-/// This is intentionally separate from the RFC CORECONF formats below: the
-/// SCHC management M-Rules match a single compact content-format value and the
-/// transport layer maps it back to method-specific CORECONF payload semantics.
-pub const SCHC_MANAGEMENT_CONTENT_FORMAT: u16 = 313;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum ContentFormat {
@@ -208,6 +200,11 @@ pub struct Request {
     pub path: String,
     pub payload: Vec<u8>,
     pub content_format: Option<ContentFormat>,
+    /// Exact CoAP Content-Format option value, when one was present.
+    ///
+    /// This is kept independently of semantic recognition so applications can
+    /// inspect formats that coreconf-runtime does not know.
+    pub raw_content_format: Option<u16>,
     pub query: QueryParams,
     /// Which CORECONF interface this request targets (`/c` or `/s`).
     pub interface: Option<Interface>,
@@ -224,6 +221,7 @@ impl Request {
             path: String::new(),
             payload: Vec::new(),
             content_format: None,
+            raw_content_format: None,
             query: QueryParams::default(),
             interface: None,
             observe: None,
@@ -244,6 +242,7 @@ impl Request {
     pub fn with_payload(mut self, payload: Vec<u8>, format: ContentFormat) -> Self {
         self.payload = payload;
         self.content_format = Some(format);
+        self.raw_content_format = Some(format.as_u16());
         self
     }
 

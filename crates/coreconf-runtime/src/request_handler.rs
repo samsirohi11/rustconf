@@ -6,8 +6,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::coap_types::{ContentFormat, Interface, Method, Request, Response, ResponseCode};
 use crate::datastore::Datastore;
+use crate::memory_backend::MemoryBackend;
 use crate::operations::{OperationBinding, OperationRegistry};
 use crate::path::PredicatePath;
+use crate::transaction::{TransactionContext, TransactionParticipant};
 
 /// A registered CoAP observer identified by its token.
 #[derive(Debug, Clone)]
@@ -20,6 +22,7 @@ pub struct Observer {
 pub struct RequestHandler {
     datastore: Datastore,
     operations: OperationRegistry,
+    transaction_participants: Vec<Box<dyn TransactionParticipant>>,
     /// Observe sequence counter (incremented on each notification).
     observe_sequence: u32,
     /// Registered observers keyed by token.
@@ -33,6 +36,7 @@ impl RequestHandler {
         Self {
             datastore,
             operations: OperationRegistry::default(),
+            transaction_participants: Vec::new(),
             observe_sequence: 0,
             observers: HashMap::new(),
             dirty_resources: HashSet::new(),
@@ -43,6 +47,7 @@ impl RequestHandler {
         Self {
             datastore,
             operations,
+            transaction_participants: Vec::new(),
             observe_sequence: 0,
             observers: HashMap::new(),
             dirty_resources: HashSet::new(),
@@ -51,6 +56,16 @@ impl RequestHandler {
 
     pub fn register_operation(&mut self, binding: Box<dyn OperationBinding>) {
         self.operations.register(binding);
+    }
+
+    /// Register a participant for root iPATCH transactions.
+    ///
+    /// Participants are invoked in registration order.
+    pub fn register_transaction_participant(
+        &mut self,
+        participant: Box<dyn TransactionParticipant>,
+    ) {
+        self.transaction_participants.push(participant);
     }
 
     pub fn datastore(&self) -> &Datastore {
@@ -145,6 +160,13 @@ impl RequestHandler {
     }
 
     pub fn handle(&mut self, request: &Request) -> Response {
+        if request.raw_content_format.is_some() && request.content_format.is_none() {
+            return Response::error(
+                ResponseCode::UnsupportedContentFormat,
+                "unknown content format",
+            );
+        }
+
         // Streaming interface (`/s`) only accepts FETCH+Observe.
         if request.interface == Some(Interface::Streaming) {
             return self.handle_streaming(request);
@@ -376,81 +398,97 @@ impl RequestHandler {
             );
         }
 
-        match decode_instances(&request.payload) {
-            Ok(instances) => {
-                if instances.is_empty() {
-                    return Response::error(
-                        ResponseCode::BadRequest,
-                        "iPATCH contained no operations",
-                    );
-                }
+        let instances = match decode_instances(&request.payload) {
+            Ok(instances) => instances,
+            Err(error) => return Response::error(ResponseCode::BadRequest, &error.to_string()),
+        };
+        if instances.is_empty() {
+            return Response::error(ResponseCode::BadRequest, "iPATCH contained no operations");
+        }
 
-                let mut applied = 0usize;
-                for instance in instances {
-                    let Some(sid) = instance.path.absolute_sid() else {
-                        continue;
-                    };
-                    let mut keys = Vec::new();
-                    for component in &instance.path.components {
-                        if let coreconf_model::instance_id::PathComponent::KeyValue(val) = component
-                        {
-                            keys.push(val.clone());
-                        }
-                    }
-                    let xpath = match self.datastore.create_xpath(sid, &keys) {
-                        Ok(xp) => xp,
-                        Err(error) => {
-                            return Response::error(ResponseCode::Conflict, &error.to_string());
-                        }
-                    };
-                    let parsed_xpath = match PredicatePath::parse(&xpath) {
-                        Ok(p) => p,
-                        Err(error) => {
-                            return Response::error(ResponseCode::Conflict, &error.to_string());
-                        }
-                    };
-                    let converted_value = match instance.value {
-                        Some(value) => {
-                            match self
-                                .datastore
-                                .model()
-                                .sid_value_to_identifier_value_at_path(
-                                    value,
-                                    &parsed_xpath.canonical_path,
-                                ) {
-                                Ok(v) => Some(v),
-                                Err(error) => {
-                                    return Response::error(
-                                        ResponseCode::Conflict,
-                                        &error.to_string(),
-                                    );
-                                }
-                            }
-                        }
-                        None => None,
-                    };
-                    let result = match converted_value {
-                        Some(value) => self.datastore.set_path(&xpath, value),
-                        None => self.datastore.delete_path(&xpath).map(|_| ()),
-                    };
-                    if let Err(error) = result {
+        // Root iPATCH is assembled against a detached datastore.  Nothing in
+        // this phase can mutate the live backend or observer state.
+        let previous_tree = self.datastore.get_all();
+        let mut candidate = Datastore::with_backend(
+            self.datastore.model().clone(),
+            MemoryBackend::new(previous_tree.clone()),
+        );
+        let mut changed_paths = Vec::new();
+        let mut changed_path_set = HashSet::new();
+        let mut applied = 0usize;
+
+        for instance in instances {
+            let Some(sid) = instance.path.absolute_sid() else {
+                continue;
+            };
+            let mut keys = Vec::new();
+            for component in &instance.path.components {
+                if let coreconf_model::instance_id::PathComponent::KeyValue(val) = component {
+                    keys.push(val.clone());
+                }
+            }
+            let xpath = match candidate.create_xpath(sid, &keys) {
+                Ok(xp) => xp,
+                Err(error) => {
+                    return Response::error(ResponseCode::Conflict, &error.to_string());
+                }
+            };
+            let parsed_xpath = match PredicatePath::parse(&xpath) {
+                Ok(p) => p,
+                Err(error) => {
+                    return Response::error(ResponseCode::Conflict, &error.to_string());
+                }
+            };
+            let converted_value = match instance.value {
+                Some(value) => match candidate
+                    .model()
+                    .sid_value_to_identifier_value_at_path(value, &parsed_xpath.canonical_path)
+                {
+                    Ok(v) => Some(v),
+                    Err(error) => {
                         return Response::error(ResponseCode::Conflict, &error.to_string());
                     }
-                    self.mark_changed(&xpath);
-                    applied += 1;
-                }
-
-                if applied == 0 {
-                    return Response::error(
-                        ResponseCode::BadRequest,
-                        "iPATCH contained no operations",
-                    );
-                }
-
-                Response::changed()
+                },
+                None => None,
+            };
+            let result = match converted_value {
+                Some(value) => candidate.set_path(&xpath, value),
+                None => candidate.delete_path(&xpath).map(|_| ()),
+            };
+            if let Err(error) = result {
+                return Response::error(ResponseCode::Conflict, &error.to_string());
             }
-            Err(error) => Response::error(ResponseCode::BadRequest, &error.to_string()),
+            if changed_path_set.insert(xpath.clone()) {
+                changed_paths.push(xpath);
+            }
+            applied += 1;
         }
+
+        if applied == 0 {
+            return Response::error(ResponseCode::BadRequest, "iPATCH contained no operations");
+        }
+
+        let candidate_tree = candidate.get_all();
+        let context =
+            TransactionContext::new(&previous_tree, &candidate_tree, &changed_paths, request);
+        for participant in &self.transaction_participants {
+            if let Err(error) = participant.pre_commit(&context) {
+                return Response::error(ResponseCode::Conflict, &error.to_string());
+            }
+        }
+
+        if let Err(error) = self.datastore.replace_tree(candidate_tree.clone()) {
+            return Response::error(ResponseCode::InternalServerError, &error.to_string());
+        }
+
+        for path in &changed_paths {
+            self.mark_changed(path);
+        }
+        for participant in &self.transaction_participants {
+            participant.post_commit(&context);
+        }
+
+        Response::changed()
     }
 
     fn handle_post(&mut self, request: &Request) -> Response {

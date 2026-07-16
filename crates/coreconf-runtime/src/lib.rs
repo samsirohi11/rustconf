@@ -6,6 +6,7 @@ pub mod memory_backend;
 pub mod operations;
 pub mod path;
 pub mod request_handler;
+pub mod transaction;
 pub mod transport;
 
 pub use backend::Backend;
@@ -18,3 +19,4 @@ pub use memory_backend::MemoryBackend;
 pub use operations::{OperationBinding, OperationRegistry};
 pub use path::PredicatePath;
 pub use request_handler::RequestHandler;
+pub use transaction::{TransactionContext, TransactionParticipant};

@@ -156,6 +156,11 @@ impl Datastore {
         self.backend.read_tree()
     }
 
+    /// Publish a complete datastore tree through the configured backend.
+    pub fn replace_tree(&mut self, tree: Value) -> Result<()> {
+        self.backend.replace_tree(tree)
+    }
+
     pub fn get_all_cbor(&self) -> Result<Vec<u8>> {
         encode_identifier_value_to_cbor(&self.model, &self.backend.read_tree())
     }
