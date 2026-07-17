@@ -208,6 +208,13 @@ impl CompositeModel {
         current_path: Option<&str>,
         resolve_identityref: bool,
     ) -> Result<Value> {
+        if let Some(path) = current_path
+            && let Some(yang_type @ YangType::Binary) = self.get_type(path)
+        {
+            let module_name = self.module_name_for_identifier(path).unwrap_or_default();
+            return cast_from_coreconf(value, yang_type, None, module_name);
+        }
+
         match value {
             Value::Object(map) => {
                 let mut new_map = Map::new();
@@ -311,6 +318,20 @@ mod tests {
     const SAMPLE_JSON: &str =
         r#"{"example-1:greeting": {"author": "Obi", "message": "Hello there!"}}"#;
 
+    const BINARY_SID: &str = r#"{
+        "module-name": "binary-example",
+        "module-revision": "unknown",
+        "item": [
+            {"identifier": "binary-example", "sid": 61000},
+            {"identifier": "/binary-example:config", "sid": 61001},
+            {"identifier": "/binary-example:config/nested", "sid": 61002},
+            {"identifier": "/binary-example:config/nested/blob", "sid": 61003, "type": "binary"},
+            {"namespace": "identity", "identifier": "selected", "sid": 61004},
+            {"identifier": "/binary-example:config/mode", "sid": 61005, "type": "identityref"}
+        ],
+        "key-mapping": {}
+    }"#;
+
     #[test]
     fn test_identifier_value_to_sid_value() {
         let model = CompositeModel::from_sid_strings(&[SAMPLE_SID]).unwrap();
@@ -331,6 +352,65 @@ mod tests {
 
         assert_eq!(json_value["example-1:greeting"]["author"], "Obi");
         assert_eq!(json_value["example-1:greeting"]["message"], "Hello there!");
+    }
+
+    #[test]
+    fn test_binary_value_at_path_is_converted_as_one_value() {
+        let model = CompositeModel::from_sid_strings(&[BINARY_SID]).unwrap();
+
+        let converted = model
+            .sid_value_to_identifier_value_at_path(
+                serde_json::json!([0, 255]),
+                "/binary-example:config/nested/blob",
+            )
+            .unwrap();
+
+        assert_eq!(converted, "AP8=");
+    }
+
+    #[test]
+    fn test_nested_binary_value_is_converted_as_one_value() {
+        let model = CompositeModel::from_sid_strings(&[BINARY_SID]).unwrap();
+
+        let converted = model
+            .sid_value_to_identifier_value(serde_json::json!({
+                "61001": {"1": {"1": [6, 7]}}
+            }))
+            .unwrap();
+
+        assert_eq!(converted["binary-example:config"]["nested"]["blob"], "Bgc=");
+    }
+
+    #[test]
+    fn test_binary_value_rejects_non_byte_array_entries() {
+        let model = CompositeModel::from_sid_strings(&[BINARY_SID]).unwrap();
+
+        let error = model
+            .sid_value_to_identifier_value_at_path(
+                serde_json::json!([6, "invalid"]),
+                "/binary-example:config/nested/blob",
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::CoreconfError::TypeConversion(message)
+                if message.contains("binary value contains non-byte entry")
+        ));
+    }
+
+    #[test]
+    fn test_preserve_sids_mode_still_converts_binary_values() {
+        let model = CompositeModel::from_sid_strings(&[BINARY_SID]).unwrap();
+
+        let converted = model
+            .sid_value_to_identifier_value_preserve_sids(serde_json::json!({
+                "61001": {"1": {"1": [6, 7]}, "4": 61004}
+            }))
+            .unwrap();
+
+        assert_eq!(converted["binary-example:config"]["nested"]["blob"], "Bgc=");
+        assert_eq!(converted["binary-example:config"]["mode"], 61004);
     }
 
     #[test]

@@ -48,6 +48,23 @@ fn runtime_model() -> CompositeModel {
     .unwrap()
 }
 
+fn binary_runtime_model() -> CompositeModel {
+    CompositeModel::from_sid_strings(&[r#"{
+        "module-name":"binary-example",
+        "module-revision":"2026-01-01",
+        "item":[
+            {"identifier":"binary-example","sid":61000},
+            {"identifier":"/binary-example:config","sid":61001},
+            {"identifier":"/binary-example:config/profile","sid":61002},
+            {"identifier":"/binary-example:config/profile/name","sid":61003,"type":"string"},
+            {"identifier":"/binary-example:config/profile/blob","sid":61004,"type":"binary"},
+            {"identifier":"/binary-example:config/enabled","sid":61005,"type":"boolean"}
+        ],
+        "key-mapping":{}
+    }"#])
+    .unwrap()
+}
+
 struct RecordingOperation {
     calls: Arc<Mutex<Vec<Option<serde_json::Value>>>>,
 }
@@ -161,6 +178,34 @@ fn request_handler_applies_valid_root_ipatch_instance() {
             .get_path("/example:settings/enabled")
             .unwrap(),
         Some(json!(true))
+    );
+}
+
+#[test]
+fn request_handler_root_ipatch_stores_binary_leaf_in_identifier_form() {
+    let mut handler = RequestHandler::new(Datastore::new_in_memory(binary_runtime_model()));
+    let request = Request::new(Method::IPatch).with_payload(
+        encode_value(&json!({
+            "61001": {
+                "1": {"1": "primary", "2": [6, 7]},
+                "4": true
+            }
+        })),
+        ContentFormat::YangInstancesCborSeq,
+    );
+
+    let response = handler.handle(&request);
+
+    assert_eq!(response.code, ResponseCode::Changed);
+    assert_eq!(
+        handler
+            .datastore()
+            .get_path("/binary-example:config")
+            .unwrap(),
+        Some(json!({
+            "profile": {"name": "primary", "blob": "Bgc="},
+            "enabled": true
+        }))
     );
 }
 
