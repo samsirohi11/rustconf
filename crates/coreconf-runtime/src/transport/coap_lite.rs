@@ -415,6 +415,7 @@ impl CoapLiteServer {
         );
         let mut packet = Packet::new();
         packet.header.message_id = request.header.message_id;
+        packet.header.set_type(immediate_response_type(request));
         packet.set_token(request.get_token().to_vec());
         packet.header.code = MessageClass::Response(ResponseType::Content);
         packet.payload = links.into_bytes();
@@ -487,6 +488,7 @@ enum Block1Outcome {
 fn block1_response(request: &Packet, code: ResponseType, block1: BlockValue) -> Packet {
     let mut packet = Packet::new();
     packet.header.message_id = request.header.message_id;
+    packet.header.set_type(immediate_response_type(request));
     packet.set_token(request.get_token().to_vec());
     packet.header.code = MessageClass::Response(code);
     packet.add_option_as(CoapOption::Block1, block1);
@@ -611,6 +613,7 @@ fn advertised_paths(resource_path: &str) -> (String, String) {
 pub fn response_to_packet(request: &Packet, response: Response) -> Packet {
     let mut packet = Packet::new();
     packet.header.message_id = request.header.message_id;
+    packet.header.set_type(immediate_response_type(request));
     packet.set_token(request.get_token().to_vec());
     packet.header.code = response_code_to_coap(response.code);
 
@@ -627,6 +630,17 @@ pub fn response_to_packet(request: &Packet, response: Response) -> Packet {
     }
 
     packet
+}
+
+fn immediate_response_type(request: &Packet) -> MessageType {
+    match request.header.get_type() {
+        MessageType::Confirmable => MessageType::Acknowledgement,
+        MessageType::NonConfirmable => MessageType::NonConfirmable,
+        // Only CON and NON packets are CoAP requests.  Preserve the existing
+        // default type for malformed input rather than expanding server
+        // handling beyond valid request packets.
+        MessageType::Acknowledgement | MessageType::Reset => MessageType::Confirmable,
+    }
 }
 
 fn add_uri_path(packet: &mut Packet, path: &str) {
@@ -996,5 +1010,74 @@ mod tests {
                 .unwrap(),
             Some(value)
         );
+    }
+
+    fn assert_handle_packet_wire_response(
+        request_type: MessageType,
+        expected_response_type: MessageType,
+        message_id: u16,
+        token: Vec<u8>,
+        expected_wire_header: &[u8],
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let handler = RequestHandler::new(crate::Datastore::new_in_memory(small_model()));
+        let mut server = CoapLiteServer::bind("127.0.0.1:0", "c", handler)?;
+        let peer: SocketAddr = "127.0.0.1:56832".parse()?;
+        let mut request = request_packet(RequestType::Get, "/c");
+        request.header.message_id = message_id;
+        request.header.set_type(request_type);
+        request.set_token(token.clone());
+
+        let request_wire = request.to_bytes()?;
+        let received_request = Packet::from_bytes(&request_wire)?;
+        let response = server.handle_packet(&received_request, peer);
+
+        assert_eq!(
+            response.header.code,
+            MessageClass::Response(ResponseType::Content)
+        );
+        assert_eq!(response.header.get_type(), expected_response_type);
+        assert_eq!(response.header.message_id, message_id);
+        assert_eq!(response.get_token(), token.as_slice());
+
+        let response_wire = response.to_bytes()?;
+        assert_eq!(
+            &response_wire[..expected_wire_header.len()],
+            expected_wire_header
+        );
+
+        let received_response = Packet::from_bytes(&response_wire)?;
+        assert_eq!(
+            received_response.header.code,
+            MessageClass::Response(ResponseType::Content)
+        );
+        assert_eq!(received_response.header.get_type(), expected_response_type);
+        assert_eq!(received_response.header.message_id, message_id);
+        assert_eq!(received_response.get_token(), token.as_slice());
+        assert_eq!(received_response.to_bytes()?, response_wire);
+        Ok(())
+    }
+
+    #[test]
+    fn handle_packet_serializes_acknowledgement_for_confirmable_request()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        assert_handle_packet_wire_response(
+            MessageType::Confirmable,
+            MessageType::Acknowledgement,
+            0x1234,
+            vec![0xa1, 0xb2],
+            &[0x62, 0x45, 0x12, 0x34, 0xa1, 0xb2],
+        )
+    }
+
+    #[test]
+    fn handle_packet_serializes_nonconfirmable_for_nonconfirmable_request()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        assert_handle_packet_wire_response(
+            MessageType::NonConfirmable,
+            MessageType::NonConfirmable,
+            0xabcd,
+            vec![0xde, 0xad, 0xbe],
+            &[0x53, 0x45, 0xab, 0xcd, 0xde, 0xad, 0xbe],
+        )
     }
 }
