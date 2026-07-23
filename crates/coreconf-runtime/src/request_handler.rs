@@ -1,5 +1,5 @@
-use coreconf_model::instance_id::decode_instances;
-use coreconf_model::{CoreconfError, Instance, InstancePath, Result};
+use coreconf_model::instance_id::decode_instances_with_model;
+use coreconf_model::{CoreconfError, Result};
 use serde_json::Value;
 
 use std::collections::{HashMap, HashSet};
@@ -297,30 +297,24 @@ impl RequestHandler {
 
         match self.parse_fetch_request(&request.payload) {
             Ok(identifiers) => {
-                let mut instances = Vec::with_capacity(identifiers.len());
+                let mut instances = Vec::new();
                 for (sid, key_values) in identifiers {
-                    let value = if key_values.is_empty() {
-                        let identifier = self
-                            .datastore
-                            .model()
-                            .get_identifier(sid)
-                            .ok_or(CoreconfError::IdentifierNotFound(sid));
-                        match identifier {
-                            Ok(id) => self.datastore.get_path(id).ok().flatten(),
-                            Err(_) => None,
-                        }
+                    let fetched = if key_values.is_empty() {
+                        self.datastore.fetch_projected_instances(&[sid])
                     } else {
-                        // Build predicate path from instance ID with keys.
-                        match self.datastore.create_xpath(sid, &key_values) {
-                            Ok(xpath) => self.datastore.get_path(&xpath).ok().flatten(),
-                            Err(_) => None,
-                        }
+                        self.datastore.fetch_instances_for_sid(sid, &key_values)
                     };
-
-                    if let Some(value) = value {
-                        let mut path = InstancePath::new();
-                        path.push_delta(sid);
-                        instances.push(Instance::new(path, value));
+                    match fetched {
+                        Ok(mut fetched) => instances.append(&mut fetched),
+                        Err(error) => {
+                            let code = match &error {
+                                CoreconfError::IdentifierNotFound(_)
+                                | CoreconfError::SidNotFound(_)
+                                | CoreconfError::ValidationError(_) => ResponseCode::BadRequest,
+                                _ => ResponseCode::InternalServerError,
+                            };
+                            return Response::error(code, &error.to_string());
+                        }
                     }
                 }
 
@@ -398,7 +392,8 @@ impl RequestHandler {
             );
         }
 
-        let instances = match decode_instances(&request.payload) {
+        let instances = match decode_instances_with_model(self.datastore.model(), &request.payload)
+        {
             Ok(instances) => instances,
             Err(error) => return Response::error(ResponseCode::BadRequest, &error.to_string()),
         };
@@ -528,7 +523,7 @@ impl RequestHandler {
         }
 
         let mut last = None;
-        for instance in decode_instances(&request.payload)? {
+        for instance in decode_instances_with_model(self.datastore.model(), &request.payload)? {
             let Some(sid) = instance.path.absolute_sid() else {
                 continue;
             };
@@ -609,17 +604,52 @@ impl RequestHandler {
     }
 
     fn parse_fetch_request(&self, payload: &[u8]) -> Result<Vec<(i64, Vec<Value>)>> {
-        let mut identifiers = Vec::new();
+        let mut values = Vec::new();
         let mut cursor = std::io::Cursor::new(payload);
 
         while (cursor.position() as usize) < payload.len() {
             let value: Value = ciborium::from_reader(&mut cursor)
                 .map_err(|error| CoreconfError::CborDecode(error.to_string()))?;
-
-            identifiers.push(parse_fetch_identifier(&value)?);
+            values.push(value);
         }
 
-        Ok(identifiers)
+        // Accept the sequence form emitted by older callers for one keyed
+        // instance (`sid`, followed by its key values), while keeping bare
+        // SID sequences unambiguous when the first SID has no keyed ancestors.
+        if values.len() > 1 {
+            if let Some(sid) = values[0].as_i64() {
+                if self.fetch_key_count(sid) == values.len() - 1
+                    && values[1..].iter().all(is_supported_fetch_key_value)
+                    && !values[1..].iter().all(|value| {
+                        value.as_i64().is_some_and(|candidate| {
+                            self.datastore.model().get_identifier(candidate).is_some()
+                        })
+                    })
+                {
+                    return Ok(vec![(sid, values[1..].to_vec())]);
+                }
+            }
+        }
+
+        values.iter().map(parse_fetch_identifier).collect()
+    }
+
+    fn fetch_key_count(&self, sid: i64) -> usize {
+        let Some(identifier) = self.datastore.model().get_identifier(sid) else {
+            return 0;
+        };
+        let mut current = String::new();
+        identifier
+            .trim_start_matches('/')
+            .split('/')
+            .filter_map(|segment| {
+                current.push('/');
+                current.push_str(segment);
+                self.datastore.model().get_sid(&current)
+            })
+            .filter_map(|list_sid| self.datastore.model().get_keys(list_sid))
+            .map(Vec::len)
+            .sum()
     }
 }
 

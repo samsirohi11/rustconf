@@ -1,4 +1,4 @@
-use coreconf_model::instance_id::decode_instances;
+use coreconf_model::instance_id::{decode_instances_with_model, PathComponent};
 use coreconf_model::{
     CompositeModel, CoreconfError, CoreconfModel, Instance, InstancePath, Result, YangType,
 };
@@ -70,7 +70,7 @@ impl Datastore {
     /// resolved predicate path.  Instance IDs with key values navigate into
     /// keyed list entries.
     pub fn apply_instance_seq(&mut self, cbor: &[u8]) -> Result<()> {
-        for instance in decode_instances(cbor)? {
+        for instance in decode_instances_with_model(&self.model, cbor)? {
             let Some(sid) = instance.path.absolute_sid() else {
                 continue;
             };
@@ -324,46 +324,234 @@ impl Datastore {
 
     pub fn fetch_instances(&self, payload: &[u8]) -> Result<Vec<Instance>> {
         let mut instances = Vec::new();
-        for path in decode_instances(payload)? {
-            if let Some(sid) = path.path.absolute_sid()
-                && let Some(identifier) = self.model.get_identifier(sid)
-                && let Some(value) = self.get_path(identifier)?
-            {
-                let mut result_path = InstancePath::new();
-                result_path.push_delta(sid);
-                instances.push(Instance::new(result_path, value));
+        for path in decode_instances_with_model(&self.model, payload)? {
+            if let Some(sid) = path.path.absolute_sid() {
+                let keys = path
+                    .path
+                    .components
+                    .iter()
+                    .filter_map(|component| match component {
+                        PathComponent::KeyValue(value) => Some(value.clone()),
+                        PathComponent::SidDelta(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                instances.extend(self.fetch_instances_for_sid(sid, &keys)?);
             }
         }
         Ok(instances)
     }
 
+    /// Projects one or more leaf SIDs across every keyed-list instance.
+    ///
+    /// A projected instance carries the list key values in its normal
+    /// `InstancePath`, so callers can regroup leaves without receiving full
+    /// list subtrees.
+    ///
+    /// # Errors
+    ///
+    /// Returns a model or datastore error when a requested SID is unknown or
+    /// projection traversal fails.
+    pub fn fetch_projected_instances(&self, sids: &[i64]) -> Result<Vec<Instance>> {
+        let mut instances = Vec::new();
+        for sid in sids {
+            instances.extend(self.fetch_instances_for_sid(*sid, &[])?);
+        }
+        Ok(instances)
+    }
+
+    /// Fetches one SID either for one explicit keyed instance or as a leaf
+    /// projection over the datastore.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unknown SIDs, malformed key counts, or datastore
+    /// traversal failures.
+    pub fn fetch_instances_for_sid(&self, sid: i64, keys: &[Value]) -> Result<Vec<Instance>> {
+        let identifier = self
+            .model
+            .get_identifier(sid)
+            .ok_or(CoreconfError::IdentifierNotFound(sid))?;
+        if !keys.is_empty() {
+            let xpath = self.create_xpath(sid, keys)?;
+            let value = match self.get_path(&xpath) {
+                Ok(value) => value,
+                Err(CoreconfError::ValidationError(message))
+                    if message.starts_with("unused predicates in path") =>
+                {
+                    return Ok(Vec::new());
+                }
+                Err(error) => return Err(error),
+            };
+            let Some(value) = value else {
+                return Ok(Vec::new());
+            };
+            return Ok(vec![Instance::new(self.instance_path(sid, keys)?, value)]);
+        }
+
+        let mut list_paths = Vec::new();
+        let mut current = String::new();
+        for segment in identifier.trim_start_matches('/').split('/') {
+            current.push('/');
+            current.push_str(segment);
+            let Some(list_sid) = self.model.get_sid(&current) else {
+                continue;
+            };
+            if self.model.get_keys(list_sid).is_some() {
+                list_paths.push(current.clone());
+            }
+        }
+
+        let mut combinations: Vec<Vec<Value>> = vec![Vec::new()];
+        for list_path in list_paths {
+            let mut next = Vec::new();
+            for prefix in &combinations {
+                for values in self.key_values_for_list(&list_path, prefix)? {
+                    let mut keys = prefix.clone();
+                    keys.extend(values);
+                    next.push(keys);
+                }
+            }
+            combinations = next;
+        }
+
+        let mut instances = Vec::new();
+        for keys in combinations {
+            let xpath = if keys.is_empty() {
+                identifier.to_owned()
+            } else {
+                self.create_xpath(sid, &keys)?
+            };
+            if let Some(value) = self.get_path(&xpath)? {
+                instances.push(Instance::new(self.instance_path(sid, &keys)?, value));
+            }
+        }
+        Ok(instances)
+    }
+
+    fn key_values_for_list(
+        &self,
+        list_path: &str,
+        parent_keys: &[Value],
+    ) -> Result<Vec<Vec<Value>>> {
+        let list_sid = self
+            .model
+            .get_sid(list_path)
+            .ok_or_else(|| CoreconfError::SidNotFound(list_path.to_owned()))?;
+        let parent_path = self.create_xpath(list_sid, parent_keys)?;
+        let Some(list_parent) = self.get_path(&parent_path)? else {
+            return Ok(Vec::new());
+        };
+        let segments = split_canonical_segments(list_path);
+        let list_name = segments.last().copied().unwrap_or("");
+        let storage = storage_key(list_name, segments.len() - 1);
+        let entries = list_parent
+            .as_object()
+            .and_then(|map| map.get(&storage))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let key_sids = self.model.get_keys(list_sid).cloned().ok_or_else(|| {
+            CoreconfError::ValidationError(format!("path is not a keyed list: '{list_path}'"))
+        })?;
+        let mut result = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let Some(entry) = entry.as_object() else {
+                continue;
+            };
+            let mut values = Vec::with_capacity(key_sids.len());
+            for key_sid in &key_sids {
+                let key_identifier = self
+                    .model
+                    .get_identifier(*key_sid)
+                    .ok_or(CoreconfError::IdentifierNotFound(*key_sid))?;
+                let key_name = segment_leaf(key_identifier);
+                let value = entry.get(key_name).ok_or_else(|| {
+                    CoreconfError::ValidationError(format!(
+                        "list entry under '{list_path}' is missing key '{key_name}'"
+                    ))
+                })?;
+                values.push(value.clone());
+            }
+            result.push(values);
+        }
+        Ok(result)
+    }
+
+    fn instance_path(&self, sid: i64, keys: &[Value]) -> Result<InstancePath> {
+        let identifier = self
+            .model
+            .get_identifier(sid)
+            .ok_or(CoreconfError::IdentifierNotFound(sid))?;
+        let mut path = InstancePath::new();
+        let mut current = String::new();
+        let mut previous_sid = 0_i64;
+        let mut key_index = 0;
+        for segment in identifier.trim_start_matches('/').split('/') {
+            current.push('/');
+            current.push_str(segment);
+            let segment_sid = self
+                .model
+                .get_sid(&current)
+                .ok_or_else(|| CoreconfError::SidNotFound(current.clone()))?;
+            path.push_delta(segment_sid - previous_sid);
+            previous_sid = segment_sid;
+            if self.model.get_keys(segment_sid).is_some() {
+                let key_count = self.model.get_keys(segment_sid).map_or(0, Vec::len);
+                if key_index + key_count > keys.len() {
+                    return Err(CoreconfError::ValidationError(format!(
+                        "missing key values for list '{current}'"
+                    )));
+                }
+                for key in &keys[key_index..key_index + key_count] {
+                    path.push_key(key.clone());
+                }
+                key_index += key_count;
+            }
+        }
+        if key_index != keys.len() {
+            return Err(CoreconfError::ValidationError(format!(
+                "too many key values for instance path '{identifier}'"
+            )));
+        }
+        Ok(path)
+    }
+
     pub fn encode_instances(&self, instances: &[Instance]) -> Result<Vec<u8>> {
         let mut bytes = Vec::new();
         for inst in instances {
-            let xpath = if let Some(sid) = inst.path.absolute_sid() {
+            let sid = inst.path.absolute_sid().unwrap_or(0);
+            let keys = inst
+                .path
+                .components
+                .iter()
+                .filter_map(|component| match component {
+                    PathComponent::KeyValue(value) => Some(value.clone()),
+                    PathComponent::SidDelta(_) => None,
+                })
+                .collect::<Vec<_>>();
+            let xpath = if sid == 0 {
+                String::new()
+            } else if keys.is_empty() {
                 self.model
                     .get_identifier(sid)
-                    .map(|id| id.to_string())
-                    .unwrap_or_default()
+                    .ok_or(CoreconfError::IdentifierNotFound(sid))?
+                    .to_owned()
             } else {
-                String::new()
+                self.create_xpath(sid, &keys)?
             };
-
+            let canonical_xpath = PredicatePath::parse(&xpath)?.canonical_path;
             let sid_value = match &inst.value {
                 Some(value) => self
                     .model
-                    .identifier_value_to_sid_value_at_path(value.clone(), &xpath)?,
+                    .identifier_value_to_sid_value_at_path(value.clone(), &canonical_xpath)?,
                 None => Value::Null,
             };
-
-            let mut inst_map = serde_json::Map::new();
-            let sid = inst.path.absolute_sid().unwrap_or(0);
-            inst_map.insert(sid.to_string(), sid_value);
-            let inst_json = Value::Object(inst_map);
-
-            let ciborium_val =
-                coreconf_model::codec::json_to_cbor_value(&self.model, &inst_json, 0);
-            ciborium::into_writer(&ciborium_val, &mut bytes)
+            let key = inst.path.to_cbor_value();
+            let ciborium_key = coreconf_model::codec::json_to_cbor_value(&self.model, &key, 0);
+            let ciborium_value =
+                coreconf_model::codec::json_to_cbor_value(&self.model, &sid_value, 0);
+            let map = ciborium::value::Value::Map(vec![(ciborium_key, ciborium_value)]);
+            ciborium::into_writer(&map, &mut bytes)
                 .map_err(|e| CoreconfError::CborEncode(e.to_string()))?;
         }
         Ok(bytes)
@@ -515,11 +703,8 @@ impl Datastore {
             };
 
             let seg_sid = self.model.get_sid(&current_path);
-            let is_list = seg_sid.and_then(|sid| self.model.get_keys(sid)).is_some();
 
-            if is_list {
-                let list_sid = seg_sid.unwrap();
-                let key_sids = self.model.get_keys(list_sid).unwrap();
+            if let Some(key_sids) = seg_sid.and_then(|sid| self.model.get_keys(sid)) {
                 let mut predicates = Vec::with_capacity(key_sids.len());
 
                 for key_sid in key_sids {

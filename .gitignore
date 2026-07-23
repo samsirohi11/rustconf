@@ -1,9 +1,1 @@
-target
-cargo.lock
-.worktrees
-.pi*
-CONTEXT.md
-docs/
-crates/coreconf-cli/.pi*
-# Windows NUL device artifact
-nul
+target/

@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::composite_model::CompositeModel;
 use crate::error::{CoreconfError, Result};
 use crate::sid_file::SidFile;
 
@@ -90,9 +91,9 @@ impl InstancePath {
         Value::Array(
             self.components
                 .iter()
-                .map(|c| match c {
+                .map(|component| match component {
                     PathComponent::SidDelta(delta) => Value::Number((*delta).into()),
-                    PathComponent::KeyValue(v) => v.clone(),
+                    PathComponent::KeyValue(value) => value.clone(),
                 })
                 .collect(),
         )
@@ -137,6 +138,50 @@ impl InstancePath {
             }
         }
 
+        Ok(path)
+    }
+
+    fn from_cbor_value_with_model(value: &Value, model: &CompositeModel) -> Result<Self> {
+        let Value::Array(values) = value else {
+            return Self::from_cbor_value(value);
+        };
+        if values.is_empty() {
+            return Err(CoreconfError::TypeConversion(
+                "instance identifier array cannot be empty".into(),
+            ));
+        }
+
+        let mut path = Self::new();
+        let mut index = 0usize;
+        while index < values.len() {
+            let delta = values[index].as_i64().ok_or_else(|| {
+                CoreconfError::TypeConversion("expected SID delta in instance identifier".into())
+            })?;
+            path.push_delta(delta);
+            let sid = path.absolute_sid().ok_or_else(|| {
+                CoreconfError::TypeConversion("instance identifier has no SID".into())
+            })?;
+            if model.get_identifier(sid).is_none() {
+                return Err(CoreconfError::SidNotFound(sid.to_string()));
+            }
+            index += 1;
+
+            let key_count = model.get_keys(sid).map_or(0, Vec::len);
+            for _ in 0..key_count {
+                let key = values.get(index).ok_or_else(|| {
+                    CoreconfError::TypeConversion(format!(
+                        "instance identifier is missing a key for list SID {sid}"
+                    ))
+                })?;
+                if !matches!(key, Value::Bool(_) | Value::Number(_) | Value::String(_)) {
+                    return Err(CoreconfError::TypeConversion(
+                        "unsupported list key value in instance identifier".into(),
+                    ));
+                }
+                path.push_key(key.clone());
+                index += 1;
+            }
+        }
         Ok(path)
     }
 }
@@ -189,35 +234,71 @@ pub fn encode_instances(instances: &[Instance]) -> Result<Vec<u8>> {
 }
 
 pub fn decode_instances(bytes: &[u8]) -> Result<Vec<Instance>> {
+    decode_instances_with_path_decoder(bytes, InstancePath::from_cbor_value)
+}
+
+/// Decodes an instance sequence using SID key-mapping metadata.
+///
+/// The ordinary instance-identifier representation does not mark integer list
+/// keys. This decoder consumes exactly the number of keys declared for each
+/// keyed-list SID, so integer keys cannot be mistaken for subsequent SID
+/// deltas. Use [`decode_instances`] when the caller intentionally needs the
+/// legacy, metadata-free representation.
+///
+/// # Errors
+///
+/// Returns an error for malformed CBOR, unknown SIDs, missing list keys, or
+/// unsupported key values.
+pub fn decode_instances_with_model(model: &CompositeModel, bytes: &[u8]) -> Result<Vec<Instance>> {
+    decode_instances_with_path_decoder(bytes, |value| {
+        InstancePath::from_cbor_value_with_model(value, model)
+    })
+}
+
+fn decode_instances_with_path_decoder(
+    bytes: &[u8],
+    mut decode_path: impl FnMut(&Value) -> Result<InstancePath>,
+) -> Result<Vec<Instance>> {
     let mut instances = Vec::new();
     let mut cursor = std::io::Cursor::new(bytes);
 
     while (cursor.position() as usize) < bytes.len() {
         let ciborium_val: ciborium::value::Value = ciborium::from_reader(&mut cursor)
             .map_err(|e| CoreconfError::CborDecode(e.to_string()))?;
-        let value = crate::codec::ciborium_value_to_serde(ciborium_val)?;
 
-        match value {
-            Value::Object(map) => {
-                for (key, val) in map {
-                    let sid: i64 = key.parse().map_err(|_| {
+        let ciborium::value::Value::Map(entries) = ciborium_val else {
+            return Err(CoreconfError::TypeConversion(
+                "invalid instance payload: expected map".into(),
+            ));
+        };
+        for (key, value) in entries {
+            let path = match key {
+                ciborium::value::Value::Integer(integer) => {
+                    let sid = i64::try_from(integer).map_err(|_| {
                         CoreconfError::TypeConversion("invalid SID in instance".into())
                     })?;
-
                     let mut path = InstancePath::new();
                     path.push_delta(sid);
-
-                    if val.is_null() {
-                        instances.push(Instance::delete(path));
-                    } else {
-                        instances.push(Instance::new(path, val));
-                    }
+                    path
                 }
-            }
-            _ => {
-                return Err(CoreconfError::TypeConversion(
-                    "invalid instance payload: expected map".into(),
-                ));
+                ciborium::value::Value::Text(text) => {
+                    let sid = text.parse::<i64>().map_err(|_| {
+                        CoreconfError::TypeConversion("invalid SID in instance".into())
+                    })?;
+                    let mut path = InstancePath::new();
+                    path.push_delta(sid);
+                    path
+                }
+                other => {
+                    let key = crate::codec::ciborium_value_to_serde(other)?;
+                    decode_path(&key)?
+                }
+            };
+            let value = crate::codec::ciborium_value_to_serde(value)?;
+            if value.is_null() {
+                instances.push(Instance::delete(path));
+            } else {
+                instances.push(Instance::new(path, value));
             }
         }
     }
@@ -234,8 +315,8 @@ mod tests {
         let mut path = InstancePath::new();
         path.push_delta(60001);
 
-        let cbor = path.encode_cbor().unwrap();
-        let decoded = InstancePath::decode_cbor(&cbor).unwrap();
+        let cbor = path.encode_cbor().expect("encode instance path");
+        let decoded = InstancePath::decode_cbor(&cbor).expect("decode instance path");
 
         assert_eq!(decoded.absolute_sid(), Some(60001));
     }
@@ -257,7 +338,7 @@ mod tests {
             Value::String("interface-1".into()),
             Value::Number(2.into()),
         ]))
-        .unwrap();
+        .expect("decode multi-key path");
 
         assert_eq!(
             decoded.components,
@@ -272,13 +353,39 @@ mod tests {
     }
 
     #[test]
+    fn test_model_aware_path_round_trips_integer_list_keys() {
+        let model = CompositeModel::from_sid_strings(&[r#"{
+            "module-name":"example",
+            "module-revision":"2026-01-01",
+            "item":[
+                {"identifier":"example","sid":2574},
+                {"identifier":"/example:rule","sid":2597},
+                {"identifier":"/example:rule/value","sid":2599},
+                {"identifier":"/example:rule/length","sid":2598},
+                {"identifier":"/example:rule/leaf","sid":2600}
+            ],
+            "key-mapping":{"2597":[2599,2598]}
+        }"#])
+        .expect("model");
+        let mut path = InstancePath::new();
+        path.push_delta(2574);
+        path.push_delta(23);
+        path.push_key(Value::Number(20.into()));
+        path.push_key(Value::Number(8.into()));
+        path.push_delta(3);
+        let decoded = InstancePath::from_cbor_value_with_model(&path.to_cbor_value(), &model)
+            .expect("integer key path");
+        assert_eq!(decoded, path);
+    }
+
+    #[test]
     fn test_encode_instances() {
         let mut path = InstancePath::new();
         path.push_delta(1755);
         let instance = Instance::new(path, Value::Bool(true));
 
-        let bytes = encode_instances(&[instance]).unwrap();
-        let decoded = decode_instances(&bytes).unwrap();
+        let bytes = encode_instances(&[instance]).expect("encode instances");
+        let decoded = decode_instances(&bytes).expect("decode instances");
 
         assert_eq!(decoded.len(), 1);
         assert_eq!(decoded[0].value, Some(Value::Bool(true)));
